@@ -835,8 +835,7 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
         return (
             f"Booking ID: {booking_id}\n\n"
             "Your booking lookup request has been received.\n\n"
-            "Booking lookup can be connected to the "
-            "WorkNest booking database here.\n\n"
+            "Booking lookup has not been connected yet.\n\n"
             "Type MENU to return to the main menu."
         )
 

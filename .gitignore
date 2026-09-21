@@ -3,3 +3,9 @@ venv/
 .env
 __pycache__/
 *.pyc
+.vercel
+.env*.local
+
+package-lock.json
+package.json
+node_modules/
