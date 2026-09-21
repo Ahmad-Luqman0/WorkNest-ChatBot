@@ -482,7 +482,7 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
     # Resolved complaint response
     # --------------------------------------------------------
 
-    if message in ["1", "2"] and supabase and contact_id:
+    if state == "main_menu" and message in ["1", "2"] and supabase and contact_id:
 
         resolved_result = (
             supabase.table("complaints")
@@ -583,7 +583,7 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
             "salam",
             "assalamualaikum",
         }:
-            return "Hello! Welcome to WorkNest Co-Working.\n\n" + main_menu()
+            return "Hello!.\n\n" + main_menu()
 
         # ----------------------------------------------------
         # Book Workspace
