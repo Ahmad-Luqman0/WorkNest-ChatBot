@@ -1879,6 +1879,26 @@ body {
         var(--orange-dark);
 }
 
+.tab-alert {
+    display: none;
+
+    margin-left: 5px;
+
+    min-width: 16px;
+
+    padding: 2px 5px;
+
+    border-radius: 10px;
+
+    background: var(--red);
+
+    color: white;
+
+    font-size: 10px;
+
+    line-height: 1.2;
+}
+
 .sidebar-header {
     padding: 16px;
 
@@ -2464,6 +2484,10 @@ body {
                 onclick="showComplaints()"
             >
                 Complaints
+                <span
+                    class="tab-alert"
+                    id="complaintAlert"
+                ></span>
             </button>
 
         </div>
@@ -2543,6 +2567,10 @@ body {
 
 let conversations = [];
 let complaints = [];
+
+let knownComplaintIds = new Set();
+
+let hasLoadedComplaints = false;
 
 let selectedConversation = null;
 
@@ -2708,6 +2736,8 @@ function showComplaints() {
 
     selectedConversation = null;
 
+    clearComplaintAlert();
+
     document
         .getElementById("messagesTab")
         .classList.remove("active");
@@ -2741,6 +2771,26 @@ function showComplaints() {
     renderComplaints();
 
     showEmptyState();
+}
+
+
+function showComplaintAlert(newComplaintCount) {
+
+    const alert =
+        document.getElementById("complaintAlert");
+
+    alert.textContent = newComplaintCount;
+    alert.style.display = "inline-block";
+}
+
+
+function clearComplaintAlert() {
+
+    const alert =
+        document.getElementById("complaintAlert");
+
+    alert.textContent = "";
+    alert.style.display = "none";
 }
 
 
@@ -3184,6 +3234,30 @@ async function loadComplaints() {
 
         complaints =
             await response.json();
+
+        const complaintIds =
+            new Set(
+                complaints.map(
+                    complaint => complaint.complaint_id
+                )
+            );
+
+        if (hasLoadedComplaints) {
+            const newComplaintCount =
+                complaints.filter(
+                    complaint =>
+                        !knownComplaintIds.has(
+                            complaint.complaint_id
+                        )
+                ).length;
+
+            if (newComplaintCount > 0) {
+                showComplaintAlert(newComplaintCount);
+            }
+        }
+
+        knownComplaintIds = complaintIds;
+        hasLoadedComplaints = true;
 
         if (
             currentView === "complaints"
