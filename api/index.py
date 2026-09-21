@@ -1963,6 +1963,24 @@ body {
         var(--orange);
 }
 
+.complaint-notification {
+    display: none;
+
+    margin-top: 10px;
+
+    padding: 9px 11px;
+
+    border-radius: 8px;
+
+    background: #FFF1D8;
+
+    color: var(--orange-dark);
+
+    font-size: 12px;
+
+    font-weight: 700;
+}
+
 /* =========================================================
    Conversations
    ========================================================= */
@@ -2520,6 +2538,12 @@ body {
                 autocomplete="off"
             >
 
+            <div
+                class="complaint-notification"
+                id="complaintNotification"
+                role="status"
+            ></div>
+
         </div>
 
 
@@ -2780,6 +2804,15 @@ function showComplaintAlert(newComplaintCount) {
 
     alert.textContent = newComplaintCount;
     alert.style.display = "inline-block";
+
+    const notification =
+        document.getElementById("complaintNotification");
+
+    notification.textContent =
+        newComplaintCount === 1
+        ? "New complaint received"
+        : `${newComplaintCount} new complaints received`;
+    notification.style.display = "block";
 }
 
 
@@ -2790,6 +2823,12 @@ function clearComplaintAlert() {
 
     alert.textContent = "";
     alert.style.display = "none";
+
+    const notification =
+        document.getElementById("complaintNotification");
+
+    notification.textContent = "";
+    notification.style.display = "none";
 }
 
 
