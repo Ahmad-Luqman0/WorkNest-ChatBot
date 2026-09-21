@@ -628,12 +628,9 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
 
             return (
                 "Pricing & Plans\n\n"
-                "1. Daily Pass - PKR XXXX\n"
-                "2. Weekly Plan - PKR XXXX\n"
-                "3. Monthly Plan - PKR XXXX\n"
-                "4. Dedicated Desk - PKR XXXX\n"
-                "5. Private Office - PKR XXXX\n"
-                "6. Meeting Room - PKR XXXX\n\n"
+                "1. Private Office - Starting from PKR 35,000 per seat\n"
+                "2. Shared Space - Starting from PKR 25,000 per seat\n"
+                "3. Meeting / Conference Room - Starting from PKR 6,000 per hour\n\n"
                 "Reply with a number."
             )
 
@@ -846,12 +843,9 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
     if state == "pricing":
 
         pricing = {
-            "1": "Daily Pass - PKR XXXX",
-            "2": "Weekly Plan - PKR XXXX",
-            "3": "Monthly Plan - PKR XXXX",
-            "4": "Dedicated Desk - PKR XXXX",
-            "5": "Private Office - PKR XXXX",
-            "6": "Meeting Room - PKR XXXX",
+            "1": "Private Office - Starting from PKR 35,000 per seat",
+            "2": "Shared Space - Starting from PKR 25,000 per seat",
+            "3": "Meeting / Conference Room - Starting from PKR 6,000 per hour",
         }
 
         if message in pricing:
@@ -867,12 +861,9 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
 
         return (
             "Please select a valid pricing option:\n\n"
-            "1. Daily Pass\n"
-            "2. Weekly Plan\n"
-            "3. Monthly Plan\n"
-            "4. Dedicated Desk\n"
-            "5. Private Office\n"
-            "6. Meeting Room"
+            "1. Private Office\n"
+            "2. Shared Space\n"
+            "3. Meeting / Conference Room"
         )
 
     # ========================================================
