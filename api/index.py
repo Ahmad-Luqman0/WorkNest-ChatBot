@@ -522,7 +522,7 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
                 return (
                     "Thank you for confirming.\n\n"
                     f"Complaint {resolved_complaint_id} has been closed.\n\n"
-                    "If you need anything else, please type MENU."
+                    "If you need anything else, please type 0."
                 )
 
             followup_complaint_id = generate_complaint_id()
@@ -567,7 +567,7 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
                 "Status: Open\n\n"
                 "Our team will investigate the issue again and contact you "
                 "if further information is required.\n\n"
-                "Type MENU to return to the main menu."
+                "Type 0 to return to the main menu."
             )
 
     # ========================================================
@@ -656,7 +656,7 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
                 "7. Kitchen & Refreshments\n"
                 "8. Parking\n"
                 "9. Reception Support\n\n"
-                "Type MENU to return to the main menu."
+                "Type 0 to return to the main menu."
             )
 
         # ----------------------------------------------------
@@ -692,7 +692,7 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
                 "Talk to Reception\n\n"
                 "Reception: +92 XXX XXXXXXX\n"
                 "Hours: 9:00 AM - 9:00 PM\n\n"
-                "Type MENU to return to the main menu."
+                "Type 0 to return to the main menu."
             )
 
         return "Please select a valid option.\n\n" + main_menu()
@@ -836,7 +836,7 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
             f"Booking ID: {booking_id}\n\n"
             "Your booking lookup request has been received.\n\n"
             "Booking lookup has not been connected yet.\n\n"
-            "Type MENU to return to the main menu."
+            "Type 0 to return to the main menu."
         )
 
     # ========================================================
@@ -862,7 +862,7 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
                 f"{pricing[message]}\n\n"
                 "For exact pricing and availability, "
                 "please contact reception.\n\n"
-                "Type MENU to return to the main menu."
+                "Type 0 to return to the main menu."
             )
 
         return (
@@ -894,7 +894,7 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
             "Kitchen & Refreshments\n"
             "Parking\n"
             "Reception Support\n\n"
-            "Type MENU to return to the main menu."
+            "Type 0 to return to the main menu."
         )
 
     # ========================================================
@@ -981,7 +981,7 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
                 "Status: Open\n\n"
                 "Our team will review the issue again and contact you "
                 "if further information is required.\n\n"
-                "Type MENU to return to the main menu."
+                "Type 0 to return to the main menu."
             )
         else:
             response_text = (
@@ -991,7 +991,7 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
                 "Status: Open\n\n"
                 "Our team will review your complaint and contact you "
                 "if further information is required.\n\n"
-                "Type MENU to return to the main menu."
+                "Type 0 to return to the main menu."
             )
 
         user_states[user_id] = {
@@ -1012,7 +1012,7 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
             "Reception\n\n"
             "Phone: +92 XXX XXXXXXX\n"
             "Hours: 9:00 AM - 9:00 PM\n\n"
-            "Type MENU to return to the main menu."
+            "Type 0 to return to the main menu."
         )
 
     # ========================================================
