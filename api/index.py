@@ -2781,6 +2781,11 @@ async function loadConversations() {
                 "/api/conversations"
             );
 
+        if (response.status === 401) {
+            window.location.href = "/dashboard/login";
+            return;
+        }
+
         if (!response.ok) {
             throw new Error(
                 "Failed to load conversations"
@@ -3156,6 +3161,11 @@ async function loadComplaints() {
             await fetch(
                 "/api/complaints"
             );
+
+        if (response.status === 401) {
+            window.location.href = "/dashboard/login";
+            return;
+        }
 
         if (!response.ok) {
             throw new Error(
