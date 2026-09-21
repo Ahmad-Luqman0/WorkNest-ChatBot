@@ -161,6 +161,7 @@ def main_menu():
         "4. Facilities\n"
         "5. Complaints / Support\n"
         "6. Talk to Reception\n\n"
+        "0. Main Menu\n\n"
         "Reply with a number."
     )
 
@@ -601,6 +602,7 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
                 "2. Private Office\n"
                 "3. Meeting Room\n"
                 "4. Conference Room\n\n"
+                "Type 0 for the main menu.\n\n"
                 "Reply with a number."
             )
 
@@ -631,6 +633,7 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
                 "1. Private Office - Starting from PKR 35,000 per seat\n"
                 "2. Shared Space - Starting from PKR 25,000 per seat\n"
                 "3. Meeting / Conference Room - Starting from PKR 6,000 per hour\n\n"
+                "Type 0 for the main menu.\n\n"
                 "Reply with a number."
             )
 
@@ -674,6 +677,7 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
                 "5. Access / Entry\n"
                 "6. Booking Issue\n"
                 "7. Other\n\n"
+                "Type 0 for the main menu.\n\n"
                 "Reply with a number."
             )
 
@@ -714,7 +718,8 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
                 "1. Shared Seat\n"
                 "2. Private Office\n"
                 "3. Meeting Room\n"
-                "4. Conference Room"
+                "4. Conference Room\n\n"
+                "Type 0 for the main menu."
             )
 
         state_data["booking"]["workspace_type"] = workspace_types[message]
@@ -817,7 +822,8 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
             f"Duration: {booking['duration']}\n\n"
             "Reply with:\n"
             "1. Confirm\n"
-            "2. Cancel"
+            "2. Cancel\n\n"
+            "Type 0 for the main menu."
         )
 
     # ========================================================
@@ -855,7 +861,12 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
 
             return "Your booking request has been cancelled.\n\n" + main_menu()
 
-        return "Please reply with:\n\n" "1. Confirm\n" "2. Cancel"
+        return (
+            "Please reply with:\n\n"
+            "1. Confirm\n"
+            "2. Cancel\n\n"
+            "Type 0 for the main menu."
+        )
 
     # ========================================================
     # BOOKING LOOKUP
@@ -901,7 +912,8 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
             "Please select a valid pricing option:\n\n"
             "1. Private Office\n"
             "2. Shared Space\n"
-            "3. Meeting / Conference Room"
+            "3. Meeting / Conference Room\n\n"
+            "Type 0 for the main menu."
         )
 
     # ========================================================
@@ -952,7 +964,8 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
                 "4. Noise\n"
                 "5. Access / Entry\n"
                 "6. Booking Issue\n"
-                "7. Other"
+                "7. Other\n\n"
+                "Type 0 for the main menu."
             )
 
         followup_complaint_id = state_data["complaint"].get("followup_complaint_id")
