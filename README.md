@@ -1,20 +1,20 @@
-# WorkNest WhatsApp Chatbot 🤖
+# WorkNest WhatsApp Chatbot
 
 A FastAPI-powered WhatsApp chatbot and admin dashboard for WorkNest Co-Working. It handles workspace requests, complaints, resolved-complaint follow-ups, and dashboard management through Supabase. 🚀
 
-## Features ✨
+## Features
 
-- 💬 WhatsApp webhook integration
-- 🧑‍💼 Workspace booking conversation flow
-- 📝 Complaint submission and tracking
-- 🔔 Resolved complaint notifications
-- 🔁 Automatic follow-up complaint creation when an issue persists
-- 🏷️ Follow-up flags linked to the previous complaint
-- 📊 Admin dashboard for conversations and complaints
-- 🔐 Username and password dashboard login
-- ☁️ Vercel deployment configuration
+- WhatsApp webhook integration
+- Workspace booking conversation flow
+- Complaint submission and tracking
+- Resolved complaint notifications
+- Automatic follow-up complaint creation when an issue persists
+- Follow-up flags linked to the previous complaint
+- Admin dashboard for conversations and complaints
+- Username and password dashboard login
+- Vercel deployment configuration
 
-## Project Structure 📁
+## Project Structure
 
 ```text
 api/index.py       FastAPI app, WhatsApp webhook, APIs, and dashboard
@@ -23,7 +23,7 @@ requirements.txt   Python dependencies
 vercel.json        Vercel routing configuration
 ```
 
-## Local Setup 🛠️
+## Local Setup
 
 Create and activate a virtual environment:
 
@@ -61,16 +61,16 @@ Open the dashboard at:
 http://localhost:8000/dashboard
 ```
 
-## Supabase Setup 🗄️
+## Supabase Setup
 
 1. Open the Supabase SQL Editor.
 2. Run the contents of `schema.sql`.
 3. Create a dashboard user with a PBKDF2 password hash.
 4. Use the username and password on `/dashboard`.
 
-The database stores contacts, conversations, messages, complaints, follow-up links, notification status, and customer resolution responses. ✅
+The database stores contacts, conversations, messages, complaints, follow-up links, notification status, and customer resolution responses.
 
-## WhatsApp Webhook 📱
+## WhatsApp Webhook
 
 For local testing, expose the app with ngrok:
 
@@ -86,7 +86,7 @@ https://your-ngrok-domain.ngrok-free.app/webhook
 
 Use the same value as `VERIFY_TOKEN` during webhook verification.
 
-## Vercel Deployment ☁️
+## Vercel Deployment
 
 1. Import this repository into Vercel.
 2. Add all environment variables from `.env` in the Vercel project settings.
@@ -103,7 +103,7 @@ Open the admin dashboard at:
 https://your-project.vercel.app/dashboard
 ```
 
-## Important Notes ⚠️
+## Important Notes
 
 - Never commit `.env` or service-role keys.
 - Keep `DASHBOARD_SESSION_SECRET` stable between deployments.
