@@ -2,6 +2,7 @@ import os
 import base64
 import hashlib
 import hmac
+import re
 import secrets
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -596,11 +597,10 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
             return (
                 "Book a Workspace\n\n"
                 "Please select a workspace type:\n\n"
-                "1. Hot Desk\n"
-                "2. Dedicated Desk\n"
-                "3. Private Office\n"
-                "4. Meeting Room\n"
-                "5. Conference Room\n\n"
+                "1. Shared Seat\n"
+                "2. Private Office\n"
+                "3. Meeting Room\n"
+                "4. Conference Room\n\n"
                 "Reply with a number."
             )
 
@@ -701,22 +701,20 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
     if state == "booking_type":
 
         workspace_types = {
-            "1": "Hot Desk",
-            "2": "Dedicated Desk",
-            "3": "Private Office",
-            "4": "Meeting Room",
-            "5": "Conference Room",
+            "1": "Shared Seat",
+            "2": "Private Office",
+            "3": "Meeting Room",
+            "4": "Conference Room",
         }
 
         if message not in workspace_types:
 
             return (
                 "Please select a valid workspace type:\n\n"
-                "1. Hot Desk\n"
-                "2. Dedicated Desk\n"
-                "3. Private Office\n"
-                "4. Meeting Room\n"
-                "5. Conference Room"
+                "1. Shared Seat\n"
+                "2. Private Office\n"
+                "3. Meeting Room\n"
+                "4. Conference Room"
             )
 
         state_data["booking"]["workspace_type"] = workspace_types[message]
@@ -751,10 +749,19 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
 
         state_data["state"] = "booking_duration"
 
+        workspace_type = state_data["booking"]["workspace_type"]
+
+        if workspace_type in {"Shared Seat", "Private Office"}:
+            return (
+                "Please enter the required duration.\n\n"
+                "Minimum duration: 1 month\n"
+                "Example: 1 month"
+            )
+
         return (
             "Please enter the required duration.\n\n"
-            "Example:\n"
-            "2 hours\n"
+            "Minimum duration: 1 hour\n"
+            "Example: 1 hour\n"
             "or\n"
             "Full day"
         )
@@ -764,6 +771,37 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
     # ========================================================
 
     if state == "booking_duration":
+
+        workspace_type = state_data["booking"]["workspace_type"]
+        normalized_duration = message.lower()
+
+        if workspace_type in {"Shared Seat", "Private Office"}:
+            month_match = re.fullmatch(
+                r"(\d+(?:\.\d+)?)\s*(month|months|mo|mos)",
+                normalized_duration,
+            )
+
+            if not month_match or float(month_match.group(1)) < 1:
+                return (
+                    f"{workspace_type} bookings require a minimum duration "
+                    "of 1 month.\n\n"
+                    "Example: 1 month"
+                )
+
+        else:
+            hour_match = re.fullmatch(
+                r"(\d+(?:\.\d+)?)\s*(hour|hours|hr|hrs)",
+                normalized_duration,
+            )
+
+            if normalized_duration != "full day" and (
+                not hour_match or float(hour_match.group(1)) < 1
+            ):
+                return (
+                    f"{workspace_type} bookings require a minimum duration "
+                    "of 1 hour.\n\n"
+                    "Example: 1 hour"
+                )
 
         state_data["booking"]["duration"] = message
 
