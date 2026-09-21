@@ -576,6 +576,15 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
 
     if state == "main_menu":
 
+        if lower_message in {
+            "hi",
+            "hello",
+            "hey",
+            "salam",
+            "assalamualaikum",
+        }:
+            return "Hello! Welcome to WorkNest Co-Working.\n\n" + main_menu()
+
         # ----------------------------------------------------
         # Book Workspace
         # ----------------------------------------------------
