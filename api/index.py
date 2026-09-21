@@ -17,7 +17,7 @@ from supabase import Client, create_client
 # Configuration
 # ============================================================
 
-load_dotenv()
+load_dotenv(override=True)
 
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
