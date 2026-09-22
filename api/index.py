@@ -437,8 +437,8 @@ def send_resolved_notification(phone_number, complaint_id):
 
     message = (
         "WorkNest Complaint Update\n\n"
-        f"Your complaint {complaint_id} has been resolved.\n\n"
-        "Does the issue persist?\n\n"
+        f"We are pleased to confirm that your complaint {complaint_id} has been resolved.\n\n"
+        "To help us verify this, please let us know whether the issue is still occurring.\n\n"
         "1. Yes, the issue persists\n"
         "2. No, the issue is resolved\n\n"
         "Please reply with 1 or 2."
