@@ -1742,16 +1742,27 @@ async def get_dashboard_stats():
 
         # 3. Confirmed This Week (last 7 days)
         seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
-        conf_res = (
-            supabase.table("bookings")
-            .select("id", count="exact")
-            .eq("status", "confirmed")
-            .gte("updated_at", seven_days_ago)
-            .execute()
-        )
-        confirmed_week = (
-            conf_res.count if conf_res.count is not None else len(conf_res.data or [])
-        )
+        try:
+            conf_res = (
+                supabase.table("bookings")
+                .select("id, updated_at, created_at", count="exact")
+                .eq("status", "confirmed")
+                .or_(f"updated_at.gte.{seven_days_ago},created_at.gte.{seven_days_ago}")
+                .execute()
+            )
+            confirmed_week = (
+                conf_res.count if conf_res.count is not None else len(conf_res.data or [])
+            )
+        except Exception:
+            conf_res = (
+                supabase.table("bookings")
+                .select("id", count="exact")
+                .eq("status", "confirmed")
+                .execute()
+            )
+            confirmed_week = (
+                conf_res.count if conf_res.count is not None else len(conf_res.data or [])
+            )
 
         # 4. Open Complaints
         comp_res = (
@@ -1767,6 +1778,7 @@ async def get_dashboard_stats():
         return {
             "active_conversations": active_conv,
             "pending_bookings": pending_bk,
+            "confirmed_week": confirmed_week,
             "confirmed_this_week": confirmed_week,
             "open_complaints": open_comp,
         }
@@ -4518,7 +4530,7 @@ async function loadDashboardStats() {
 
         if (elActive) elActive.textContent = stats.active_conversations ?? 0;
         if (elPending) elPending.textContent = stats.pending_bookings ?? 0;
-        if (elConfirmed) elConfirmed.textContent = stats.confirmed_week ?? 0;
+        if (elConfirmed) elConfirmed.textContent = (stats.confirmed_week ?? stats.confirmed_this_week ?? 0);
         if (elOpen) elOpen.textContent = stats.open_complaints ?? 0;
     } catch (e) {
         console.error("Failed to load dashboard stats:", e);
@@ -6179,6 +6191,7 @@ async function updateComplaintStatus(
         }
 
         await loadComplaints();
+        await loadDashboardStats();
 
     } catch (error) {
 
@@ -6624,6 +6637,7 @@ async function updateBookingStatus(
         }
 
         await loadBookings();
+        await loadDashboardStats();
 
         showToast(
             `Booking ${bookingId} updated to ${status.toUpperCase()}`,
