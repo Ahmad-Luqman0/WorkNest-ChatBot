@@ -481,6 +481,53 @@ def send_whatsapp_text(phone_number, message):
     )
 
 
+def send_whatsapp_template(
+    phone_number,
+    template_name="worknest_agent_message",
+    language_code="en_US",
+    body_parameters=None,
+):
+    if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
+        raise RuntimeError("WhatsApp credentials are missing.")
+
+    url = f"https://graph.facebook.com/v23.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json",
+    }
+
+    params = [{"type": "text", "text": str(p)} for p in (body_parameters or [])]
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": phone_number,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {
+                "code": language_code,
+            },
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": params,
+                }
+            ],
+        },
+    }
+
+    response = requests.post(url, headers=headers, json=payload, timeout=20)
+    if not response.ok:
+        # Retry with alternate English language codes if en_US fails
+        for alt_lang in ["en", "en_GB", "en_US"]:
+            if alt_lang != language_code:
+                payload["template"]["language"]["code"] = alt_lang
+                alt_res = requests.post(url, headers=headers, json=payload, timeout=20)
+                if alt_res.ok:
+                    return alt_res
+    return response
+
+
 def send_resolved_notification(phone_number, complaint_id):
 
     message = (
@@ -1586,6 +1633,254 @@ async def get_conversation_messages(conversation_id: int):
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
+@app.post("/api/conversations/{conversation_id}/messages")
+async def send_manual_message(conversation_id: int, request: Request):
+
+    if not supabase:
+        return JSONResponse(
+            content={"error": "Supabase is not configured"}, status_code=500
+        )
+
+    try:
+        body = await request.json()
+        message_text = (body.get("message") or "").strip()
+        if not message_text:
+            return JSONResponse(
+                content={"error": "Message text cannot be empty"}, status_code=400
+            )
+
+        # 1. Fetch conversation and contact
+        conv_res = (
+            supabase.table("whatsapp_conversations")
+            .select(
+                "id, contact_id, status, whatsapp_contacts(id, phone_number, name)"
+            )
+            .eq("id", conversation_id)
+            .limit(1)
+            .execute()
+        )
+
+        if not conv_res.data:
+            return JSONResponse(
+                content={"error": "Conversation not found"}, status_code=404
+            )
+
+        conv = conv_res.data[0]
+        contact = conv.get("whatsapp_contacts") or {}
+        raw_phone = contact.get("phone_number") or ""
+        contact_name = contact.get("name") or "Valued Customer"
+
+        # Normalize phone
+        clean_phone = re.sub(r"[^\d]", "", str(raw_phone))
+        if clean_phone.startswith("0") and len(clean_phone) == 11:
+            clean_phone = "92" + clean_phone[1:]
+        elif clean_phone.startswith("00"):
+            clean_phone = clean_phone[2:]
+
+        if not clean_phone:
+            return JSONResponse(
+                content={"error": "Invalid recipient phone number"}, status_code=400
+            )
+
+        # 2. Check 24-hour window from the last incoming message
+        last_incoming = (
+            supabase.table("whatsapp_messages")
+            .select("created_at")
+            .eq("conversation_id", conversation_id)
+            .eq("direction", "incoming")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+
+        within_24h = False
+        if last_incoming.data:
+            last_time_str = last_incoming.data[0].get("created_at")
+            if last_time_str:
+                try:
+                    last_dt = datetime.fromisoformat(
+                        last_time_str.replace("Z", "+00:00")
+                    )
+                    diff = (datetime.now(timezone.utc) - last_dt).total_seconds()
+                    if diff <= 86400:
+                        within_24h = True
+                except Exception as ex:
+                    print("Error checking 24h window:", ex)
+
+        # 3. Attempt sending:
+        api_response = None
+        method_used = "text"
+
+        if within_24h:
+            # Try standard text message
+            api_response = send_whatsapp_text(clean_phone, message_text)
+            if not api_response.ok:
+                err_text = api_response.text
+                if "131047" in err_text or "24 hours" in err_text.lower():
+                    method_used = "template"
+                    api_response = send_whatsapp_template(
+                        clean_phone,
+                        template_name="worknest_agent_message",
+                        language_code="en_US",
+                        body_parameters=[contact_name, message_text],
+                    )
+        else:
+            # Outside 24 hours: send via pre-approved template
+            method_used = "template"
+            api_response = send_whatsapp_template(
+                clean_phone,
+                template_name="worknest_agent_message",
+                language_code="en_US",
+                body_parameters=[contact_name, message_text],
+            )
+
+        if not api_response.ok:
+            err_data = {}
+            try:
+                err_data = api_response.json()
+            except Exception:
+                err_data = {"raw": api_response.text}
+
+            fb_error = err_data.get("error", {})
+            fb_msg = fb_error.get("message", "Failed to send message via WhatsApp")
+            fb_code = fb_error.get("code")
+
+            if "template" in fb_msg.lower() or fb_code in (100, 132000, 132001, 132015):
+                fb_msg = (
+                    "Template 'worknest_agent_message' is still under review or pending approval by Meta. "
+                    "Once approved, messages outside the 24-hour window will be delivered."
+                )
+
+            return JSONResponse(
+                content={
+                    "error": fb_msg,
+                    "details": err_data,
+                    "within_24h": within_24h,
+                },
+                status_code=400,
+            )
+
+        # 4. Message successfully sent - Save to database
+        res_json = api_response.json()
+        messages_list = res_json.get("messages", [])
+        wamid = messages_list[0].get("id") if messages_list else None
+
+        saved = (
+            supabase.table("whatsapp_messages")
+            .insert({
+                "conversation_id": conversation_id,
+                "whatsapp_message_id": wamid,
+                "direction": "outgoing",
+                "message_type": method_used,
+                "message_text": message_text,
+            })
+            .execute()
+        )
+
+        supabase.table("whatsapp_conversations").update({
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }).eq("id", conversation_id).execute()
+
+        new_msg = (
+            saved.data[0]
+            if saved.data
+            else {
+                "id": None,
+                "conversation_id": conversation_id,
+                "whatsapp_message_id": wamid,
+                "direction": "outgoing",
+                "message_type": method_used,
+                "message_text": message_text,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
+
+        return {
+            "success": True,
+            "method": method_used,
+            "message": new_msg,
+        }
+
+    except Exception as e:
+        print("Manual send message error:", e)
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+@app.post("/api/conversations/start-or-get")
+async def start_or_get_conversation(request: Request):
+
+    if not supabase:
+        return JSONResponse(
+            content={"error": "Supabase is not configured"}, status_code=500
+        )
+
+    try:
+        body = await request.json()
+        raw_phone = (body.get("phone_number") or "").strip()
+        name = (body.get("name") or "").strip() or None
+
+        clean_phone = re.sub(r"[^\d]", "", raw_phone)
+        if clean_phone.startswith("0") and len(clean_phone) == 11:
+            clean_phone = "92" + clean_phone[1:]
+        elif clean_phone.startswith("00"):
+            clean_phone = clean_phone[2:]
+
+        if not clean_phone:
+            return JSONResponse(
+                content={"error": "Valid phone number is required"}, status_code=400
+            )
+
+        # Find or create contact
+        contact_res = (
+            supabase.table("whatsapp_contacts")
+            .select("id, phone_number, name")
+            .eq("phone_number", clean_phone)
+            .limit(1)
+            .execute()
+        )
+
+        if contact_res.data:
+            contact = contact_res.data[0]
+            contact_id = contact["id"]
+            if name and not contact.get("name"):
+                supabase.table("whatsapp_contacts").update({"name": name}).eq(
+                    "id", contact_id
+                ).execute()
+        else:
+            new_c = (
+                supabase.table("whatsapp_contacts")
+                .insert({"phone_number": clean_phone, "name": name})
+                .execute()
+            )
+            contact_id = new_c.data[0]["id"]
+
+        # Find or create open conversation
+        conv_res = (
+            supabase.table("whatsapp_conversations")
+            .select("id, contact_id, status")
+            .eq("contact_id", contact_id)
+            .order("updated_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+
+        if conv_res.data:
+            conv_id = conv_res.data[0]["id"]
+        else:
+            new_conv = (
+                supabase.table("whatsapp_conversations")
+                .insert({"contact_id": contact_id, "status": "open"})
+                .execute()
+            )
+            conv_id = new_conv.data[0]["id"]
+
+        return {"success": True, "conversation_id": conv_id}
+
+    except Exception as e:
+        print("Start conversation error:", e)
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
 # ============================================================
 # Dashboard - Complaints API
 # ============================================================
@@ -2676,6 +2971,129 @@ body {
 }
 
 /* =========================================================
+   Chat Composer & Manual Messaging
+   ========================================================= */
+
+.chat-composer {
+    padding: 14px 20px;
+    background: var(--white);
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.chat-composer-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+}
+
+.chat-composer-textarea {
+    flex: 1;
+    min-height: 44px;
+    max-height: 120px;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: 14px;
+    resize: none;
+    line-height: 1.4;
+    outline: none;
+    background: #FAFAFA;
+    box-sizing: border-box;
+    transition: border-color 0.2s;
+}
+
+.chat-composer-textarea:focus {
+    border-color: var(--orange);
+    background: #FFFFFF;
+}
+
+.chat-composer-btn {
+    padding: 0 20px;
+    height: 44px;
+    background: var(--orange);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.2s, opacity 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    white-space: nowrap;
+}
+
+.chat-composer-btn:hover {
+    background: var(--orange-dark);
+}
+
+.chat-composer-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.chat-composer-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    color: var(--muted);
+}
+
+.new-chat-btn {
+    background: var(--orange);
+    color: white;
+    border: none;
+    border-radius: 6px;
+    padding: 5px 11px;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.2s;
+    white-space: nowrap;
+}
+
+.new-chat-btn:hover {
+    background: var(--orange-dark);
+}
+
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background: rgba(0, 0, 0, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 9999;
+}
+
+.modal-box {
+    background: #FFFFFF;
+    border-radius: 12px;
+    width: 90%;
+    max-width: 480px;
+    padding: 24px;
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.15);
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+}
+
+/* =========================================================
    Complaints
    ========================================================= */
 
@@ -3040,6 +3458,34 @@ body {
 
 <div class="toast-container" id="toastContainer"></div>
 
+<div id="newChatModal" class="modal-overlay" style="display: none;" onclick="if(event.target===this) closeNewChatModal()">
+    <div class="modal-box">
+        <div class="modal-header">
+            <h3 style="margin: 0; font-size: 16px; font-weight: 750; color: var(--text);">New WhatsApp Message</h3>
+            <button type="button" onclick="closeNewChatModal()" style="background: none; border: none; font-size: 20px; line-height: 1; cursor: pointer; color: var(--muted);">&times;</button>
+        </div>
+        <div style="margin-top: 16px; display: flex; flex-direction: column; gap: 14px;">
+            <div>
+                <label style="display: block; font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 5px;">Recipient Phone Number *</label>
+                <input id="newChatPhone" class="search" placeholder="e.g. 03221234567 or 923221234567" style="height: 38px;">
+            </div>
+            <div>
+                <label style="display: block; font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 5px;">Customer Name (Optional)</label>
+                <input id="newChatName" class="search" placeholder="Customer name" style="height: 38px;">
+            </div>
+            <div>
+                <label style="display: block; font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 5px;">Message *</label>
+                <textarea id="newChatMessage" class="chat-composer-textarea" rows="3" placeholder="Type your message here..."></textarea>
+            </div>
+            <div id="newChatStatus" style="font-size: 12px; font-weight: 600; min-height: 16px;"></div>
+            <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 6px;">
+                <button type="button" onclick="closeNewChatModal()" class="status-btn" style="background: #E5E7EB; color: #374151;">Cancel</button>
+                <button type="button" id="newChatSubmitBtn" onclick="submitNewChat()" class="chat-composer-btn" style="height: 38px;">Send Message</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="app">
 
     <aside
@@ -3109,19 +3555,30 @@ body {
 
             <div class="sidebar-title-row">
 
-                <div
-                    class="sidebar-title"
-                    id="listTitle"
-                >
-                    Conversations
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <div
+                        class="sidebar-title"
+                        id="listTitle"
+                    >
+                        Conversations
+                    </div>
+
+                    <div
+                        class="count"
+                        id="itemCount"
+                    >
+                        0
+                    </div>
                 </div>
 
-                <div
-                    class="count"
-                    id="itemCount"
+                <button
+                    id="newChatBtn"
+                    class="new-chat-btn"
+                    onclick="openNewChatModal()"
+                    title="Start new conversation with any phone number"
                 >
-                    0
-                </div>
+                    + New Message
+                </button>
 
             </div>
 
@@ -3315,6 +3772,9 @@ function showMessages() {
 
     selectedConversation = null;
 
+    const newChatBtn = document.getElementById("newChatBtn");
+    if (newChatBtn) newChatBtn.style.display = "inline-flex";
+
     document
         .getElementById("messagesTab")
         .classList.add("active");
@@ -3362,6 +3822,9 @@ function showBookings() {
 
     clearBookingAlert();
 
+    const newChatBtn = document.getElementById("newChatBtn");
+    if (newChatBtn) newChatBtn.style.display = "none";
+
     document
         .getElementById("messagesTab")
         .classList.remove("active");
@@ -3408,6 +3871,9 @@ function showComplaints() {
     selectedConversation = null;
 
     clearComplaintAlert();
+
+    const newChatBtn = document.getElementById("newChatBtn");
+    if (newChatBtn) newChatBtn.style.display = "none";
 
     document
         .getElementById("messagesTab")
@@ -3821,7 +4287,38 @@ async function loadMessages(
                 id="messages"
             ></div>
 
+            <div class="chat-composer">
+                <div class="chat-composer-row">
+                    <textarea
+                        id="manualMessageInput"
+                        class="chat-composer-textarea"
+                        placeholder="Type your message to send via WhatsApp..."
+                        rows="1"
+                        onkeydown="handleManualKey(event, ${conversationId})"
+                    ></textarea>
+                    <button
+                        id="manualSendBtn"
+                        class="chat-composer-btn"
+                        onclick="sendManualMessage(${conversationId})"
+                    >
+                        Send
+                    </button>
+                </div>
+                <div class="chat-composer-footer">
+                    <span>Press Enter to send (Shift + Enter for new line)</span>
+                    <span id="manualSendStatus" style="font-weight: 600;"></span>
+                </div>
+            </div>
+
         `;
+
+        const textarea = document.getElementById("manualMessageInput");
+        if (textarea) {
+            textarea.addEventListener("input", function() {
+                this.style.height = "auto";
+                this.style.height = Math.min(this.scrollHeight, 120) + "px";
+            });
+        }
 
         const container =
             document.getElementById(
@@ -3912,6 +4409,231 @@ async function loadMessages(
 
         console.error(error);
 
+    }
+}
+
+
+/* =========================================================
+   Manual Messaging & Actions
+   ========================================================= */
+
+async function sendManualMessage(conversationId) {
+    const textarea = document.getElementById("manualMessageInput");
+    const sendBtn = document.getElementById("manualSendBtn");
+    const statusSpan = document.getElementById("manualSendStatus");
+    if (!textarea || !sendBtn) return;
+
+    const text = textarea.value.trim();
+    if (!text) {
+        textarea.focus();
+        return;
+    }
+
+    textarea.disabled = true;
+    sendBtn.disabled = true;
+    sendBtn.textContent = "Sending...";
+    if (statusSpan) {
+        statusSpan.style.color = "var(--muted)";
+        statusSpan.textContent = "Sending via WhatsApp...";
+    }
+
+    try {
+        const response = await fetch(`/api/conversations/${conversationId}/messages`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: text })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || "Failed to send message");
+        }
+
+        textarea.value = "";
+        textarea.style.height = "auto";
+        textarea.disabled = false;
+        sendBtn.disabled = false;
+        sendBtn.textContent = "Send";
+        textarea.focus();
+
+        const methodBadge = data.method === "template" ? " (via Template)" : "";
+        if (statusSpan) {
+            statusSpan.style.color = "var(--green)";
+            statusSpan.textContent = `Sent successfully${methodBadge}`;
+            setTimeout(() => {
+                if (statusSpan) statusSpan.textContent = "";
+            }, 3500);
+        }
+
+        showToast(`Message sent successfully${methodBadge}`);
+
+        const container = document.getElementById("messages");
+        if (container) {
+            const emptyEl = container.querySelector(".empty");
+            if (emptyEl) emptyEl.remove();
+
+            const timeStr = formatTime(new Date().toISOString());
+            const bubble = document.createElement("div");
+            bubble.className = "message-row outgoing";
+            bubble.innerHTML = `
+                <div class="message outgoing">
+                    <div>${escapeHtml(text).replace(/\n/g, "<br>")}</div>
+                    <div class="message-time">${escapeHtml(timeStr)}</div>
+                </div>
+            `;
+            container.appendChild(bubble);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        loadConversations();
+
+    } catch (err) {
+        console.error(err);
+        textarea.disabled = false;
+        sendBtn.disabled = false;
+        sendBtn.textContent = "Send";
+        if (statusSpan) {
+            statusSpan.style.color = "#DC3545";
+            statusSpan.textContent = err.message;
+        }
+        showToast(err.message, "error");
+    }
+}
+
+function handleManualKey(event, conversationId) {
+    if (event.key === "Enter" && !event.shiftKey) {
+        event.preventDefault();
+        sendManualMessage(conversationId);
+    }
+}
+
+function openNewChatModal() {
+    const modal = document.getElementById("newChatModal");
+    if (!modal) return;
+    document.getElementById("newChatPhone").value = "";
+    document.getElementById("newChatName").value = "";
+    document.getElementById("newChatMessage").value = "";
+    const status = document.getElementById("newChatStatus");
+    if (status) status.textContent = "";
+    modal.style.display = "flex";
+    document.getElementById("newChatPhone").focus();
+}
+
+function closeNewChatModal() {
+    const modal = document.getElementById("newChatModal");
+    if (modal) modal.style.display = "none";
+}
+
+async function submitNewChat() {
+    const phoneInput = document.getElementById("newChatPhone");
+    const nameInput = document.getElementById("newChatName");
+    const msgInput = document.getElementById("newChatMessage");
+    const submitBtn = document.getElementById("newChatSubmitBtn");
+    const status = document.getElementById("newChatStatus");
+
+    const phone = (phoneInput.value || "").trim();
+    const name = (nameInput.value || "").trim();
+    const message = (msgInput.value || "").trim();
+
+    if (!phone) {
+        if (status) {
+            status.style.color = "#DC3545";
+            status.textContent = "Please enter a valid phone number.";
+        }
+        phoneInput.focus();
+        return;
+    }
+
+    if (!message) {
+        if (status) {
+            status.style.color = "#DC3545";
+            status.textContent = "Please enter a message to send.";
+        }
+        msgInput.focus();
+        return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Sending...";
+    if (status) {
+        status.style.color = "var(--muted)";
+        status.textContent = "Sending WhatsApp message...";
+    }
+
+    try {
+        const convRes = await fetch("/api/conversations/start-or-get", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ phone_number: phone, name: name })
+        });
+        const convData = await convRes.json();
+        if (!convRes.ok) {
+            throw new Error(convData.error || "Failed to start conversation");
+        }
+
+        const convId = convData.conversation_id;
+
+        const msgRes = await fetch(`/api/conversations/${convId}/messages`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: message })
+        });
+        const msgData = await msgRes.json();
+        if (!msgRes.ok) {
+            throw new Error(msgData.error || "Failed to send message");
+        }
+
+        closeNewChatModal();
+        showToast("WhatsApp message sent successfully");
+
+        await loadConversations();
+        showMessages();
+        selectConversation(convId);
+
+    } catch (err) {
+        console.error(err);
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Send Message";
+        if (status) {
+            status.style.color = "#DC3545";
+            status.textContent = err.message;
+        }
+        showToast(err.message, "error");
+    }
+}
+
+async function chatWithCustomer(phoneNumber, customerName) {
+    if (!phoneNumber) {
+        showToast("No phone number available for this booking", "error");
+        return;
+    }
+
+    showToast("Opening conversation with customer...");
+
+    try {
+        const response = await fetch("/api/conversations/start-or-get", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ phone_number: phoneNumber, name: customerName })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.error || "Could not open conversation");
+        }
+
+        await loadConversations();
+        showMessages();
+        await selectConversation(data.conversation_id);
+
+        setTimeout(() => {
+            const input = document.getElementById("manualMessageInput");
+            if (input) input.focus();
+        }, 150);
+
+    } catch (err) {
+        console.error(err);
+        showToast(err.message, "error");
     }
 }
 
@@ -4189,7 +4911,7 @@ function renderComplaints() {
                                 complaint.phone_number
                                 || ""
                             )}
-                            ·
+                            -
                             ${formatDate(
                                 complaint.created_at
                             )}
@@ -4575,6 +5297,7 @@ function selectBooking(bookingId) {
                     <span>
                         ${escapeHtml(booking.customer_phone || 'N/A')}
                         ${cleanPhone ? `<a href="https://wa.me/${cleanPhone}" target="_blank" style="margin-left: 10px; color: var(--green); text-decoration: none; font-weight: 700;">Open in WhatsApp</a>` : ''}
+                        ${cleanPhone ? `<button type="button" onclick="chatWithCustomer('${escapeHtml(booking.customer_phone || '')}', '${escapeHtml(booking.customer_name || '')}')" style="margin-left: 10px; background: var(--orange); color: white; border: none; border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: 700; cursor: pointer;">Chat in Dashboard</button>` : ''}
                     </span>
 
                     <span style="color: var(--muted); font-weight: 600;">Seats / Persons:</span>
