@@ -1,6 +1,6 @@
 # WorkNest WhatsApp Chatbot
 
-A FastAPI-powered WhatsApp chatbot and admin dashboard for WorkNest Co-Working. It handles workspace requests, complaints, resolved-complaint follow-ups, and dashboard management through Supabase. 🚀
+A FastAPI-powered WhatsApp chatbot and admin dashboard for WorkNest Co-Working. It handles workspace requests, complaints, resolved-complaint follow-ups, and dashboard management through Supabase.
 
 ## Features
 

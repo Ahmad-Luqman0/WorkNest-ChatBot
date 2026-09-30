@@ -4520,11 +4520,7 @@ function showToast(message, type = "success") {
     const toast = document.createElement("div");
     toast.className = `toast toast-${type}`;
 
-    let icon = "✓";
-    if (type === "error") icon = "✕";
-    if (type === "info") icon = "ℹ";
-
-    toast.innerHTML = `<span style="font-size:15px;">${icon}</span> <span>${escapeHtml(message)}</span>`;
+    toast.innerHTML = `<span>${escapeHtml(message)}</span>`;
     container.appendChild(toast);
 
     setTimeout(() => {
@@ -4549,11 +4545,11 @@ function selectBooking(bookingId) {
 
     chat.innerHTML = `
         <div class="chat-header">
-            <div class="chat-avatar" style="background:var(--orange-dark); font-size: 20px;">
-                🏢
+            <div class="chat-avatar" style="background:var(--orange-dark); font-size: 17px; font-weight: 800;">
+                W
             </div>
             <div class="chat-info">
-                <div class="chat-name">${escapeHtml(booking.booking_id)} · ${escapeHtml(booking.workspace_type)}</div>
+                <div class="chat-name">${escapeHtml(booking.booking_id)} - ${escapeHtml(booking.workspace_type)}</div>
                 <div class="chat-phone">${escapeHtml(booking.customer_name || 'Customer')} (${escapeHtml(booking.customer_phone || '')})</div>
             </div>
         </div>
@@ -4578,7 +4574,7 @@ function selectBooking(bookingId) {
                     <span style="color: var(--muted); font-weight: 600;">Contact Phone:</span>
                     <span>
                         ${escapeHtml(booking.customer_phone || 'N/A')}
-                        ${cleanPhone ? `<a href="https://wa.me/${cleanPhone}" target="_blank" style="margin-left: 10px; color: var(--green); text-decoration: none; font-weight: 700;">💬 Open in WhatsApp</a>` : ''}
+                        ${cleanPhone ? `<a href="https://wa.me/${cleanPhone}" target="_blank" style="margin-left: 10px; color: var(--green); text-decoration: none; font-weight: 700;">Open in WhatsApp</a>` : ''}
                     </span>
 
                     <span style="color: var(--muted); font-weight: 600;">Seats / Persons:</span>
@@ -4597,7 +4593,7 @@ function selectBooking(bookingId) {
                             ${status === 'confirmed' ? 'disabled' : ''}
                             onclick="updateBookingStatus('${escapeHtml(booking.booking_id)}', 'confirmed', this)"
                         >
-                            ✓ Mark Confirmed
+                            Mark Confirmed
                         </button>
                         <button
                             class="status-btn ${status === 'completed' ? 'current-status' : ''}"
@@ -4605,7 +4601,7 @@ function selectBooking(bookingId) {
                             ${status === 'completed' ? 'disabled' : ''}
                             onclick="updateBookingStatus('${escapeHtml(booking.booking_id)}', 'completed', this)"
                         >
-                            ✓ Mark Completed
+                            Mark Completed
                         </button>
                         <button
                             class="status-btn ${status === 'pending' ? 'current-status' : ''}"
@@ -4613,7 +4609,7 @@ function selectBooking(bookingId) {
                             ${status === 'pending' ? 'disabled' : ''}
                             onclick="updateBookingStatus('${escapeHtml(booking.booking_id)}', 'pending', this)"
                         >
-                            ⏳ Mark Pending
+                            Mark Pending
                         </button>
                         <button
                             class="status-btn ${status === 'cancelled' ? 'current-status' : ''}"
@@ -4621,7 +4617,7 @@ function selectBooking(bookingId) {
                             ${status === 'cancelled' ? 'disabled' : ''}
                             onclick="updateBookingStatus('${escapeHtml(booking.booking_id)}', 'cancelled', this)"
                         >
-                            ✕ Cancel Booking
+                            Cancel Booking
                         </button>
                     </div>
                 </div>
@@ -4643,7 +4639,7 @@ async function updateBookingStatus(
 
     if (btnElement) {
         oldBtnText = btnElement.innerHTML;
-        btnElement.innerHTML = `⏳ Updating...`;
+        btnElement.innerHTML = `Updating...`;
         if (parentGroup) {
             parentGroup.querySelectorAll("button").forEach(b => b.disabled = true);
         }
@@ -4680,7 +4676,7 @@ async function updateBookingStatus(
         await loadBookings();
 
         showToast(
-            `✓ Booking ${bookingId} updated to ${status.toUpperCase()}!`,
+            `Booking ${bookingId} updated to ${status.toUpperCase()}`,
             "success"
         );
 
@@ -4693,7 +4689,7 @@ async function updateBookingStatus(
         console.error(error);
 
         showToast(
-            `✕ ${error.message}`,
+            `Error: ${error.message}`,
             "error"
         );
 
