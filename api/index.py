@@ -1894,15 +1894,51 @@ async def update_booking_status(booking_id: str, request: Request):
         .execute()
     )
 
-    if not result.data:
-        return JSONResponse(
-            {"error": f"Booking '{booking_id}' was not found."},
-            status_code=404,
-        )
+    updated_booking = result.data[0]
+
+    # Send WhatsApp notification to customer if confirmed or cancelled
+    if new_status in {"confirmed", "cancelled"}:
+        try:
+            phone_number = updated_booking.get("customer_phone")
+            if not phone_number and updated_booking.get("contact_id"):
+                contact_res = (
+                    supabase.table("whatsapp_contacts")
+                    .select("phone_number")
+                    .eq("id", updated_booking["contact_id"])
+                    .limit(1)
+                    .execute()
+                )
+                if contact_res.data:
+                    phone_number = contact_res.data[0].get("phone_number")
+
+            if phone_number:
+                cust_name = updated_booking.get("customer_name") or "Customer"
+                ws = updated_booking.get("workspace_type") or "Workspace"
+
+                if new_status == "confirmed":
+                    msg = (
+                        "WorkNest Booking Confirmed!\n\n"
+                        f"Dear {cust_name},\n"
+                        f"Your booking request {booking_id} for {ws} has been confirmed.\n\n"
+                        "We look forward to welcoming you at WorkNest!\n"
+                        "If you have any questions, feel free to reply to this chat."
+                    )
+                else:
+                    msg = (
+                        "WorkNest Booking Update\n\n"
+                        f"Dear {cust_name},\n"
+                        f"Your booking request {booking_id} has been cancelled.\n\n"
+                        "If you wish to make a new booking, type 0 to view the main menu."
+                    )
+
+                send_whatsapp_message(phone_number, msg)
+
+        except Exception as e:
+            print("Failed to send booking notification via WhatsApp:", e)
 
     return {
         "success": True,
-        "booking": result.data[0],
+        "booking": updated_booking,
     }
 
 
@@ -2816,6 +2852,89 @@ body {
 }
 
 /* =========================================================
+   Toast & Action Buttons
+   ========================================================= */
+
+.toast-container {
+    position: fixed;
+    top: 20px;
+    right: 24px;
+    z-index: 99999;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+}
+
+.toast {
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 18px;
+    background: #1e293b;
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 8px;
+    box-shadow: 0 10px 25px rgba(0,0,0,0.25);
+    animation: toastSlideIn 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+@keyframes toastSlideIn {
+    from { opacity: 0; transform: translateY(-16px) scale(0.95); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.toast-success { border-left: 4px solid var(--green); }
+.toast-error { border-left: 4px solid var(--red); }
+.toast-info { border-left: 4px solid var(--blue); }
+
+.status-btn {
+    border: none;
+    padding: 10px 18px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.18s ease-in-out;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    position: relative;
+    user-select: none;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+.status-btn:hover:not(:disabled) {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+}
+
+.status-btn:active:not(:disabled) {
+    transform: translateY(1px) scale(0.98);
+}
+
+.status-btn:disabled {
+    opacity: 0.65;
+    cursor: not-allowed;
+    transform: none !important;
+}
+
+.status-btn.current-status {
+    box-shadow: 0 0 0 3px rgba(0,0,0,0.12), inset 0 2px 4px rgba(0,0,0,0.1);
+    filter: brightness(0.96);
+}
+
+.status-btn.current-status::after {
+    content: " (Current)";
+    font-size: 11px;
+    opacity: 0.85;
+    font-weight: 600;
+}
+
+/* =========================================================
    Empty State
    ========================================================= */
 
@@ -2897,6 +3016,8 @@ body {
 </head>
 
 <body>
+
+<div class="toast-container" id="toastContainer"></div>
 
 <div class="app">
 
@@ -4371,6 +4492,28 @@ function renderBookings() {
 }
 
 
+function showToast(message, type = "success") {
+    const container = document.getElementById("toastContainer");
+    if (!container) return;
+
+    const toast = document.createElement("div");
+    toast.className = `toast toast-${type}`;
+
+    let icon = "✓";
+    if (type === "error") icon = "✕";
+    if (type === "info") icon = "ℹ";
+
+    toast.innerHTML = `<span style="font-size:15px;">${icon}</span> <span>${escapeHtml(message)}</span>`;
+    container.appendChild(toast);
+
+    setTimeout(() => {
+        toast.style.opacity = "0";
+        toast.style.transform = "translateY(-12px)";
+        setTimeout(() => toast.remove(), 300);
+    }, 3200);
+}
+
+
 function selectBooking(bookingId) {
 
     const booking = bookings.find(b => b.booking_id === bookingId);
@@ -4397,7 +4540,7 @@ function selectBooking(bookingId) {
             <div style="background: #ffffff; border: 1px solid var(--border); border-radius: 12px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 14px;">
                     <h2 style="margin:0; font-size: 18px; color: var(--text);">Workspace Reservation Details</h2>
-                    <span class="status status-${escapeHtml(status)}" style="font-size: 12px; padding: 6px 14px;">
+                    <span id="bookingCardStatus" class="status status-${escapeHtml(status)}" style="font-size: 12px; padding: 6px 14px;">
                         ${escapeHtml(status.toUpperCase())}
                     </span>
                 </div>
@@ -4425,12 +4568,40 @@ function selectBooking(bookingId) {
                 </div>
 
                 <div style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border);">
-                    <div style="font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 10px;">QUICK STATUS UPDATE:</div>
-                    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-                        <button onclick="updateBookingStatus('${escapeHtml(booking.booking_id)}', 'confirmed')" style="background: #198754; color: white; border: none; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer;">✓ Mark Confirmed</button>
-                        <button onclick="updateBookingStatus('${escapeHtml(booking.booking_id)}', 'completed')" style="background: #2563EB; color: white; border: none; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer;">✓ Mark Completed</button>
-                        <button onclick="updateBookingStatus('${escapeHtml(booking.booking_id)}', 'pending')" style="background: #FFF1D8; color: #D98208; border: 1px solid #D98208; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer;">Mark Pending</button>
-                        <button onclick="updateBookingStatus('${escapeHtml(booking.booking_id)}', 'cancelled')" style="background: #DC3545; color: white; border: none; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer;">✕ Cancel Booking</button>
+                    <div style="font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 12px; letter-spacing: 0.5px;">UPDATE RESERVATION STATUS:</div>
+                    <div id="bookingActionGroup" style="display: flex; gap: 10px; flex-wrap: wrap;">
+                        <button
+                            class="status-btn ${status === 'confirmed' ? 'current-status' : ''}"
+                            style="background: #198754; color: white;"
+                            ${status === 'confirmed' ? 'disabled' : ''}
+                            onclick="updateBookingStatus('${escapeHtml(booking.booking_id)}', 'confirmed', this)"
+                        >
+                            ✓ Mark Confirmed
+                        </button>
+                        <button
+                            class="status-btn ${status === 'completed' ? 'current-status' : ''}"
+                            style="background: #2563EB; color: white;"
+                            ${status === 'completed' ? 'disabled' : ''}
+                            onclick="updateBookingStatus('${escapeHtml(booking.booking_id)}', 'completed', this)"
+                        >
+                            ✓ Mark Completed
+                        </button>
+                        <button
+                            class="status-btn ${status === 'pending' ? 'current-status' : ''}"
+                            style="background: #FFF1D8; color: #D98208; border: 1px solid #D98208;"
+                            ${status === 'pending' ? 'disabled' : ''}
+                            onclick="updateBookingStatus('${escapeHtml(booking.booking_id)}', 'pending', this)"
+                        >
+                            ⏳ Mark Pending
+                        </button>
+                        <button
+                            class="status-btn ${status === 'cancelled' ? 'current-status' : ''}"
+                            style="background: #DC3545; color: white;"
+                            ${status === 'cancelled' ? 'disabled' : ''}
+                            onclick="updateBookingStatus('${escapeHtml(booking.booking_id)}', 'cancelled', this)"
+                        >
+                            ✕ Cancel Booking
+                        </button>
                     </div>
                 </div>
             </div>
@@ -4442,8 +4613,20 @@ function selectBooking(bookingId) {
 
 async function updateBookingStatus(
     bookingId,
-    status
+    status,
+    btnElement = null
 ) {
+
+    const parentGroup = btnElement ? btnElement.parentElement : null;
+    let oldBtnText = "";
+
+    if (btnElement) {
+        oldBtnText = btnElement.innerHTML;
+        btnElement.innerHTML = `⏳ Updating...`;
+        if (parentGroup) {
+            parentGroup.querySelectorAll("button").forEach(b => b.disabled = true);
+        }
+    }
 
     try {
 
@@ -4467,14 +4650,18 @@ async function updateBookingStatus(
             );
 
         if (!response.ok) {
-
+            const err = await response.json();
             throw new Error(
-                "Failed to update booking"
+                err.error || "Failed to update booking"
             );
-
         }
 
         await loadBookings();
+
+        showToast(
+            `✓ Booking ${bookingId} updated to ${status.toUpperCase()}!`,
+            "success"
+        );
 
         if (currentView === "bookings") {
             selectBooking(bookingId);
@@ -4484,9 +4671,17 @@ async function updateBookingStatus(
 
         console.error(error);
 
-        alert(
-            "Unable to update booking status."
+        showToast(
+            `✕ ${error.message}`,
+            "error"
         );
+
+        if (btnElement) {
+            btnElement.innerHTML = oldBtnText;
+            if (parentGroup) {
+                parentGroup.querySelectorAll("button").forEach(b => b.disabled = false);
+            }
+        }
 
     }
 }
