@@ -2234,17 +2234,21 @@ body {
 
     background: transparent;
 
-    padding: 10px;
+    padding: 9px 4px;
 
     border-radius: 8px;
 
     cursor: pointer;
 
-    font-size: 13px;
+    font-size: 12px;
 
     font-weight: 700;
 
     color: var(--muted);
+
+    text-align: center;
+
+    white-space: nowrap;
 }
 
 .tab.active {
@@ -4256,6 +4260,7 @@ function renderBookings() {
 
                     <div
                         class="booking"
+                        onclick="selectBooking('${escapeHtml(booking.booking_id)}')"
                     >
 
                         <div
@@ -4298,6 +4303,7 @@ function renderBookings() {
 
                         <select
                             class="booking-select"
+                            onclick="event.stopPropagation()"
                             onchange="updateBookingStatus(
                                 '${escapeHtml(
                                     booking.booking_id
@@ -4365,6 +4371,75 @@ function renderBookings() {
 }
 
 
+function selectBooking(bookingId) {
+
+    const booking = bookings.find(b => b.booking_id === bookingId);
+    if (!booking) return;
+
+    document.getElementById("sidebar").classList.add("hidden");
+    document.getElementById("chat").classList.add("mobile-visible");
+
+    const status = booking.status || "pending";
+    const chat = document.getElementById("chat");
+    const cleanPhone = (booking.customer_phone || "").replace(/[^0-9]/g, "");
+
+    chat.innerHTML = `
+        <div class="chat-header">
+            <div class="chat-avatar" style="background:var(--orange-dark); font-size: 20px;">
+                🏢
+            </div>
+            <div class="chat-info">
+                <div class="chat-name">${escapeHtml(booking.booking_id)} · ${escapeHtml(booking.workspace_type)}</div>
+                <div class="chat-phone">${escapeHtml(booking.customer_name || 'Customer')} (${escapeHtml(booking.customer_phone || '')})</div>
+            </div>
+        </div>
+        <div style="padding: 24px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px;">
+            <div style="background: #ffffff; border: 1px solid var(--border); border-radius: 12px; padding: 24px; box-shadow: 0 1px 3px rgba(0,0,0,0.05);">
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 14px;">
+                    <h2 style="margin:0; font-size: 18px; color: var(--text);">Workspace Reservation Details</h2>
+                    <span class="status status-${escapeHtml(status)}" style="font-size: 12px; padding: 6px 14px;">
+                        ${escapeHtml(status.toUpperCase())}
+                    </span>
+                </div>
+                <div style="display: grid; grid-template-columns: 140px 1fr; row-gap: 12px; font-size: 14px;">
+                    <span style="color: var(--muted); font-weight: 600;">Booking ID:</span>
+                    <span><strong>${escapeHtml(booking.booking_id)}</strong></span>
+
+                    <span style="color: var(--muted); font-weight: 600;">Workspace:</span>
+                    <span><strong>${escapeHtml(booking.workspace_type)}</strong></span>
+
+                    <span style="color: var(--muted); font-weight: 600;">Customer Name:</span>
+                    <span>${escapeHtml(booking.customer_name || 'N/A')}</span>
+
+                    <span style="color: var(--muted); font-weight: 600;">Contact Phone:</span>
+                    <span>
+                        ${escapeHtml(booking.customer_phone || 'N/A')}
+                        ${cleanPhone ? `<a href="https://wa.me/${cleanPhone}" target="_blank" style="margin-left: 10px; color: var(--green); text-decoration: none; font-weight: 700;">💬 Open in WhatsApp</a>` : ''}
+                    </span>
+
+                    <span style="color: var(--muted); font-weight: 600;">Seats / Persons:</span>
+                    <span>${escapeHtml(booking.seats || '1')}</span>
+
+                    <span style="color: var(--muted); font-weight: 600;">Received Date:</span>
+                    <span>${formatDate(booking.created_at)} ${formatTime(booking.created_at)}</span>
+                </div>
+
+                <div style="margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border);">
+                    <div style="font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 10px;">QUICK STATUS UPDATE:</div>
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                        <button onclick="updateBookingStatus('${escapeHtml(booking.booking_id)}', 'confirmed')" style="background: #198754; color: white; border: none; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer;">✓ Mark Confirmed</button>
+                        <button onclick="updateBookingStatus('${escapeHtml(booking.booking_id)}', 'completed')" style="background: #2563EB; color: white; border: none; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer;">✓ Mark Completed</button>
+                        <button onclick="updateBookingStatus('${escapeHtml(booking.booking_id)}', 'pending')" style="background: #FFF1D8; color: #D98208; border: 1px solid #D98208; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer;">Mark Pending</button>
+                        <button onclick="updateBookingStatus('${escapeHtml(booking.booking_id)}', 'cancelled')" style="background: #DC3545; color: white; border: none; padding: 8px 16px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer;">✕ Cancel Booking</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+
+
 async function updateBookingStatus(
     bookingId,
     status
@@ -4400,6 +4475,10 @@ async function updateBookingStatus(
         }
 
         await loadBookings();
+
+        if (currentView === "bookings") {
+            selectBooking(bookingId);
+        }
 
     } catch (error) {
 
