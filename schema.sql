@@ -21,10 +21,18 @@ create table if not exists whatsapp_contacts (
 
     name text,
 
+    tags text default '',
+
+    admin_notes text default '',
+
     created_at timestamptz not null default now(),
 
     updated_at timestamptz not null default now()
 );
+
+-- Migration helpers if tables already exist:
+alter table whatsapp_contacts add column if not exists tags text default '';
+alter table whatsapp_contacts add column if not exists admin_notes text default '';
 
 
 create index if not exists idx_whatsapp_contacts_phone

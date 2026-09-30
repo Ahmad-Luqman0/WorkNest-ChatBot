@@ -27,6 +27,15 @@ VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "").strip() or None
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip() or None
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip() or None
 
+WORKNEST_LATITUDE = os.getenv("WORKNEST_LATITUDE", "33.6684509").strip()
+WORKNEST_LONGITUDE = os.getenv("WORKNEST_LONGITUDE", "73.0737427").strip()
+WORKNEST_ADDRESS = os.getenv(
+    "WORKNEST_ADDRESS", "3rd Floor, EOBI Mall, I-8 Markaz, Islamabad"
+).strip()
+WORKNEST_LOCATION_NAME = os.getenv(
+    "WORKNEST_LOCATION_NAME", "WorkNest Co-Working Space"
+).strip()
+
 app = FastAPI(title="WorkNest WhatsApp Chatbot")
 
 DASHBOARD_SESSION_SECRET = os.getenv("DASHBOARD_SESSION_SECRET")
@@ -161,6 +170,7 @@ def main_menu():
         "4. Facilities\n"
         "5. Complaints / Support\n"
         "6. Talk to Reception\n"
+        "7. Location & Directions\n"
         "0. Main Menu\n\n"
         "Reply with a number."
     )
@@ -528,6 +538,41 @@ def send_whatsapp_template(
     return response
 
 
+def send_whatsapp_location(
+    to,
+    latitude=None,
+    longitude=None,
+    name=None,
+    address=None,
+):
+    if not WHATSAPP_TOKEN or not PHONE_NUMBER_ID:
+        print("WhatsApp credentials missing for location pin.")
+        return False
+
+    url = f"https://graph.facebook.com/v23.0/{PHONE_NUMBER_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "location",
+        "location": {
+            "latitude": str(latitude or WORKNEST_LATITUDE),
+            "longitude": str(longitude or WORKNEST_LONGITUDE),
+            "name": str(name or WORKNEST_LOCATION_NAME),
+            "address": str(address or WORKNEST_ADDRESS),
+        },
+    }
+    try:
+        response = requests.post(url, headers=headers, json=payload, timeout=15)
+        return response.ok
+    except Exception as e:
+        print("Location send error:", e)
+        return False
+
+
 def send_resolved_notification(phone_number, complaint_id):
 
     message = (
@@ -574,6 +619,29 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
         state_data["complaint"] = {}
 
         return main_menu()
+
+    if lower_message in [
+        "location",
+        "directions",
+        "address",
+        "map",
+        "pin",
+        "where are you",
+    ] or "where is worknest" in lower_message or "how to reach" in lower_message:
+
+        state_data["state"] = "main_menu"
+        state_data["booking"] = {}
+        state_data["complaint"] = {}
+
+        send_whatsapp_location(user_id)
+
+        return (
+            "WorkNest Location & Directions\n\n"
+            f"Address: {WORKNEST_ADDRESS}\n"
+            "Hours: Open 24/7 for registered members. Front reception: 9:00 AM - 9:00 PM.\n\n"
+            "An interactive WhatsApp map pin has been sent directly below. Tap the pin to navigate with Google Maps or Apple Maps.\n\n"
+            "Type 0 to return to the main menu."
+        )
 
     # --------------------------------------------------------
     # Resolved complaint response
@@ -788,6 +856,30 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
                 "Talk to Reception\n\n"
                 "Reception: +92 XXX XXXXXXX\n"
                 "Hours: 9:00 AM - 9:00 PM\n\n"
+                "Type 0 to return to the main menu."
+            )
+
+        # ----------------------------------------------------
+        # Location & Directions
+        # ----------------------------------------------------
+
+        if message == "7" or lower_message in [
+            "location",
+            "directions",
+            "address",
+            "map",
+            "pin",
+        ]:
+
+            state_data["state"] = "main_menu"
+
+            send_whatsapp_location(user_id)
+
+            return (
+                "WorkNest Location & Directions\n\n"
+                f"Address: {WORKNEST_ADDRESS}\n"
+                "Hours: Open 24/7 for registered members. Front reception: 9:00 AM - 9:00 PM.\n\n"
+                "An interactive WhatsApp map pin has been sent directly below. Tap the pin to navigate with Google Maps or Apple Maps.\n\n"
                 "Type 0 to return to the main menu."
             )
 
@@ -1548,22 +1640,44 @@ async def get_conversations():
 
     try:
 
-        result = (
-            supabase.table("whatsapp_conversations")
-            .select(
-                "id,"
-                "contact_id,"
-                "status,"
-                "created_at,"
-                "updated_at,"
-                "whatsapp_contacts("
-                "phone_number,"
-                "name"
-                ")"
+        try:
+            result = (
+                supabase.table("whatsapp_conversations")
+                .select(
+                    "id,"
+                    "contact_id,"
+                    "status,"
+                    "created_at,"
+                    "updated_at,"
+                    "whatsapp_contacts("
+                    "id,"
+                    "phone_number,"
+                    "name,"
+                    "tags,"
+                    "admin_notes"
+                    ")"
+                )
+                .order("updated_at", desc=True)
+                .execute()
             )
-            .order("updated_at", desc=True)
-            .execute()
-        )
+        except Exception:
+            result = (
+                supabase.table("whatsapp_conversations")
+                .select(
+                    "id,"
+                    "contact_id,"
+                    "status,"
+                    "created_at,"
+                    "updated_at,"
+                    "whatsapp_contacts("
+                    "id,"
+                    "phone_number,"
+                    "name"
+                    ")"
+                )
+                .order("updated_at", desc=True)
+                .execute()
+            )
 
         conversations = []
 
@@ -1574,9 +1688,11 @@ async def get_conversations():
             conversations.append(
                 {
                     "id": conversation.get("id"),
-                    "contact_id": conversation.get("contact_id"),
+                    "contact_id": conversation.get("contact_id") or contact.get("id"),
                     "phone_number": contact.get("phone_number"),
                     "name": contact.get("name"),
+                    "tags": contact.get("tags") or "",
+                    "admin_notes": contact.get("admin_notes") or "",
                     "status": conversation.get("status"),
                     "created_at": conversation.get("created_at"),
                     "updated_at": conversation.get("updated_at"),
@@ -1589,6 +1705,103 @@ async def get_conversations():
 
         print("Conversation API error:", e)
 
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+@app.get("/api/dashboard/stats")
+async def get_dashboard_stats():
+
+    if not supabase:
+        return JSONResponse(
+            content={"error": "Supabase is not configured"}, status_code=500
+        )
+
+    try:
+        # 1. Active Conversations
+        conv_res = (
+            supabase.table("whatsapp_conversations")
+            .select("id", count="exact")
+            .eq("status", "open")
+            .execute()
+        )
+        active_conv = (
+            conv_res.count if conv_res.count is not None else len(conv_res.data or [])
+        )
+
+        # 2. Pending Bookings
+        bk_res = (
+            supabase.table("bookings")
+            .select("id", count="exact")
+            .eq("status", "pending")
+            .execute()
+        )
+        pending_bk = (
+            bk_res.count if bk_res.count is not None else len(bk_res.data or [])
+        )
+
+        # 3. Confirmed This Week (last 7 days)
+        seven_days_ago = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
+        conf_res = (
+            supabase.table("bookings")
+            .select("id", count="exact")
+            .eq("status", "confirmed")
+            .gte("updated_at", seven_days_ago)
+            .execute()
+        )
+        confirmed_week = (
+            conf_res.count if conf_res.count is not None else len(conf_res.data or [])
+        )
+
+        # 4. Open Complaints
+        comp_res = (
+            supabase.table("complaints")
+            .select("id", count="exact")
+            .in_("status", ["open", "in_progress"])
+            .execute()
+        )
+        open_comp = (
+            comp_res.count if comp_res.count is not None else len(comp_res.data or [])
+        )
+
+        return {
+            "active_conversations": active_conv,
+            "pending_bookings": pending_bk,
+            "confirmed_this_week": confirmed_week,
+            "open_complaints": open_comp,
+        }
+
+    except Exception as e:
+        print("Dashboard stats error:", e)
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+@app.patch("/api/contacts/{contact_id}/meta")
+async def update_contact_meta(contact_id: int, request: Request):
+
+    if not supabase:
+        return JSONResponse(
+            content={"error": "Supabase is not configured"}, status_code=500
+        )
+
+    try:
+        body = await request.json()
+        update_data = {"updated_at": datetime.now(timezone.utc).isoformat()}
+        if "tags" in body:
+            update_data["tags"] = str(body.get("tags") or "").strip()
+        if "admin_notes" in body:
+            update_data["admin_notes"] = str(body.get("admin_notes") or "").strip()
+
+        res = (
+            supabase.table("whatsapp_contacts")
+            .update(update_data)
+            .eq("id", contact_id)
+            .execute()
+        )
+
+        return {"success": True, "contact": res.data[0] if res.data else {}}
+
+    except Exception as e:
+        print("Update contact meta error:", e)
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
@@ -2494,9 +2707,124 @@ body {
 
 .app {
     height: 100vh;
-
     display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
 
+.top-nav {
+    height: 64px;
+    background: var(--white);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    flex-shrink: 0;
+    gap: 16px;
+    z-index: 100;
+}
+
+.top-nav-left {
+    display: flex;
+    align-items: center;
+    min-width: 200px;
+}
+
+.top-kpi-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    overflow-x: auto;
+    padding: 4px 0;
+}
+
+.kpi-card {
+    background: #FAFAFA;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 14px;
+    display: flex;
+    flex-direction: column;
+    min-width: 125px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+.kpi-card:hover {
+    background: #FFF7ED;
+    border-color: var(--orange);
+    transform: translateY(-1px);
+}
+
+.kpi-label {
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--muted);
+    white-space: nowrap;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.kpi-value {
+    font-size: 16px;
+    font-weight: 800;
+    color: var(--text);
+    margin-top: 2px;
+}
+
+.kpi-warning {
+    color: var(--orange-dark);
+}
+
+.kpi-success {
+    color: var(--green);
+}
+
+.kpi-danger {
+    color: var(--red);
+}
+
+.top-nav-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.nav-control-btn {
+    background: #F3F4F6;
+    border: 1px solid var(--border);
+    color: #374151;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+}
+
+.nav-control-btn:hover {
+    background: #E5E7EB;
+}
+
+.nav-control-btn.active {
+    background: var(--orange-light);
+    color: var(--orange-dark);
+    border-color: var(--orange);
+}
+
+.nav-control-btn.logout-btn:hover {
+    background: #FEE2E2;
+    color: #DC2626;
+    border-color: #F87171;
+}
+
+.main-workspace {
+    flex: 1;
+    display: flex;
+    min-height: 0;
     overflow: hidden;
 }
 
@@ -2506,67 +2834,38 @@ body {
 
 .sidebar {
     width: var(--sidebar-width);
-
     background: var(--white);
-
-    border-right:
-        1px solid var(--border);
-
+    border-right: 1px solid var(--border);
     display: flex;
-
     flex-direction: column;
 }
 
-.brand {
-    height: 72px;
-
-    display: flex;
-
-    align-items: center;
-
-    padding: 0 22px;
-
-    border-bottom:
-        1px solid var(--border);
-}
-
 .brand-logo {
-    width: 40px;
-    height: 40px;
-
-    border-radius: 12px;
-
-    background:
-        var(--orange);
-
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    background: var(--orange);
     display: flex;
-
     align-items: center;
     justify-content: center;
-
     color: white;
-
-    font-size: 18px;
-
+    font-size: 17px;
     font-weight: 800;
 }
 
 .brand-text {
-    margin-left: 12px;
+    margin-left: 10px;
 }
 
 .brand-title {
-    font-size: 17px;
-
+    font-size: 16px;
     font-weight: 800;
 }
 
 .brand-subtitle {
     color: var(--muted);
-
-    font-size: 12px;
-
-    margin-top: 2px;
+    font-size: 11px;
+    margin-top: 1px;
 }
 
 .tabs {
@@ -3095,6 +3394,157 @@ body {
 }
 
 /* =========================================================
+   Tags, Contact Meta & Export
+   ========================================================= */
+
+.tag-badge {
+    display: inline-block;
+    padding: 2px 7px;
+    border-radius: 10px;
+    font-size: 9px;
+    font-weight: 700;
+    margin-right: 4px;
+    margin-top: 4px;
+    letter-spacing: 0.3px;
+    text-transform: capitalize;
+}
+
+.tag-hot-lead {
+    background: #FEE2E2;
+    color: #DC2626;
+    border: 1px solid #FECACA;
+}
+
+.tag-corporate {
+    background: #EDE9FE;
+    color: #7C3AED;
+    border: 1px solid #DDD6FE;
+}
+
+.tag-day-pass {
+    background: #FEF3C7;
+    color: #D97706;
+    border: 1px solid #FDE68A;
+}
+
+.tag-active-member {
+    background: #D1FAE5;
+    color: #059669;
+    border: 1px solid #A7F3D0;
+}
+
+.contact-meta-box {
+    background: #FFFFFF;
+    border-bottom: 1px solid var(--border);
+    padding: 10px 24px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.tag-chip {
+    padding: 4px 10px;
+    border-radius: 16px;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    background: #F3F4F6;
+    color: #4B5563;
+    border: 1px solid #E5E7EB;
+    transition: all 0.15s;
+    user-select: none;
+}
+
+.tag-chip:hover {
+    filter: brightness(0.95);
+}
+
+.tag-chip.selected-hot-lead {
+    background: #DC2626;
+    color: #FFFFFF;
+    border-color: #DC2626;
+}
+
+.tag-chip.selected-corporate {
+    background: #7C3AED;
+    color: #FFFFFF;
+    border-color: #7C3AED;
+}
+
+.tag-chip.selected-day-pass {
+    background: #D97706;
+    color: #FFFFFF;
+    border-color: #D97706;
+}
+
+.tag-chip.selected-active-member {
+    background: #059669;
+    color: #FFFFFF;
+    border-color: #059669;
+}
+
+.admin-notes-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+    min-width: 250px;
+}
+
+.admin-notes-input {
+    flex: 1;
+    height: 32px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 0 10px;
+    font-size: 12px;
+    background: #FAFAFA;
+    outline: none;
+}
+
+.admin-notes-input:focus {
+    border-color: var(--orange);
+    background: #FFFFFF;
+}
+
+.save-note-btn {
+    height: 32px;
+    padding: 0 12px;
+    background: #374151;
+    color: #FFFFFF;
+    border: none;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.15s;
+    white-space: nowrap;
+}
+
+.save-note-btn:hover {
+    background: #1F2937;
+}
+
+.export-btn {
+    background: #198754;
+    color: #FFFFFF;
+    border: none;
+    border-radius: 6px;
+    padding: 5px 11px;
+    font-size: 11px;
+    font-weight: 700;
+    cursor: pointer;
+    transition: background 0.2s;
+    white-space: nowrap;
+}
+
+.export-btn:hover {
+    background: #157347;
+}
+
+/* =========================================================
    Complaints
    ========================================================= */
 
@@ -3489,152 +3939,187 @@ body {
 
 <div class="app">
 
-    <aside
-        class="sidebar"
-        id="sidebar"
-    >
-
-        <div class="brand">
-
-            <div class="brand-logo">
-                W
-            </div>
-
+    <header class="top-nav">
+        <div class="top-nav-left">
+            <div class="brand-logo">W</div>
             <div class="brand-text">
-
-                <div class="brand-title">
-                    WorkNest
-                </div>
-
-                <div class="brand-subtitle">
-                    WhatsApp Admin
-                </div>
-
+                <div class="brand-title">WorkNest</div>
+                <div class="brand-subtitle">WhatsApp Admin</div>
             </div>
-
         </div>
 
-
-        <div class="tabs">
-
-            <button
-                class="tab active"
-                id="messagesTab"
-                onclick="showMessages()"
-            >
-                Messages
-            </button>
-
-            <button
-                class="tab"
-                id="bookingsTab"
-                onclick="showBookings()"
-            >
-                Bookings
-                <span
-                    class="tab-alert"
-                    id="bookingAlert"
-                ></span>
-            </button>
-
-            <button
-                class="tab"
-                id="complaintsTab"
-                onclick="showComplaints()"
-            >
-                Complaints
-                <span
-                    class="tab-alert"
-                    id="complaintAlert"
-                ></span>
-            </button>
-
+        <div class="top-kpi-bar" id="kpiBar">
+            <div class="kpi-card" onclick="showMessages()" title="Click to view messages">
+                <span class="kpi-label">Active Chats</span>
+                <span class="kpi-value" id="kpiActiveConversations">-</span>
+            </div>
+            <div class="kpi-card" onclick="showBookings()" title="Click to view bookings">
+                <span class="kpi-label">Pending Bookings</span>
+                <span class="kpi-value kpi-warning" id="kpiPendingBookings">-</span>
+            </div>
+            <div class="kpi-card" onclick="showBookings()" title="Click to view bookings">
+                <span class="kpi-label">Confirmed (7d)</span>
+                <span class="kpi-value kpi-success" id="kpiConfirmedWeek">-</span>
+            </div>
+            <div class="kpi-card" onclick="showComplaints()" title="Click to view complaints">
+                <span class="kpi-label">Open Complaints</span>
+                <span class="kpi-value kpi-danger" id="kpiOpenComplaints">-</span>
+            </div>
         </div>
 
+        <div class="top-nav-right">
+            <button id="soundToggleBtn" class="nav-control-btn active" onclick="toggleSound()" title="Toggle notification sound chime">
+                Sound: ON
+            </button>
+            <button id="notifyToggleBtn" class="nav-control-btn" onclick="requestDesktopNotification()" title="Enable desktop notifications">
+                Notifications
+            </button>
+            <button class="nav-control-btn logout-btn" onclick="logout()" title="Log out">
+                Logout
+            </button>
+        </div>
+    </header>
 
-        <div class="sidebar-header">
+    <div class="main-workspace">
 
-            <div class="sidebar-title-row">
+        <aside
+            class="sidebar"
+            id="sidebar"
+        >
 
-                <div style="display: flex; align-items: center; gap: 8px;">
-                    <div
-                        class="sidebar-title"
-                        id="listTitle"
-                    >
-                        Conversations
-                    </div>
-
-                    <div
-                        class="count"
-                        id="itemCount"
-                    >
-                        0
-                    </div>
-                </div>
+            <div class="tabs">
 
                 <button
-                    id="newChatBtn"
-                    class="new-chat-btn"
-                    onclick="openNewChatModal()"
-                    title="Start new conversation with any phone number"
+                    class="tab active"
+                    id="messagesTab"
+                    onclick="showMessages()"
                 >
-                    + New Message
+                    Messages
+                </button>
+
+                <button
+                    class="tab"
+                    id="bookingsTab"
+                    onclick="showBookings()"
+                >
+                    Bookings
+                    <span
+                        class="tab-alert"
+                        id="bookingAlert"
+                    ></span>
+                </button>
+
+                <button
+                    class="tab"
+                    id="complaintsTab"
+                    onclick="showComplaints()"
+                >
+                    Complaints
+                    <span
+                        class="tab-alert"
+                        id="complaintAlert"
+                    ></span>
                 </button>
 
             </div>
 
-            <input
-                id="search"
-                class="search"
-                type="text"
-                placeholder="Search..."
-                autocomplete="off"
-            >
 
-            <div
-                class="complaint-notification"
-                id="complaintNotification"
-                role="status"
-            ></div>
+            <div class="sidebar-header">
 
-        </div>
+                <div class="sidebar-title-row">
 
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <div
+                            class="sidebar-title"
+                            id="listTitle"
+                        >
+                            Conversations
+                        </div>
 
-        <div
-            class="list"
-            id="list"
-        ></div>
+                        <div
+                            class="count"
+                            id="itemCount"
+                        >
+                            0
+                        </div>
+                    </div>
 
-    </aside>
+                    <div style="display: flex; align-items: center; gap: 6px;">
+                        <button
+                            id="newChatBtn"
+                            class="new-chat-btn"
+                            onclick="openNewChatModal()"
+                            title="Start new conversation with any phone number"
+                        >
+                            + New Message
+                        </button>
+                        <button
+                            id="exportCsvBtn"
+                            class="export-btn"
+                            style="display: none;"
+                            onclick="exportCurrentViewCsv()"
+                            title="Download CSV report"
+                        >
+                            Export CSV
+                        </button>
+                    </div>
 
-
-    <main
-        class="chat"
-        id="chat"
-    >
-
-        <div
-            class="empty"
-            id="emptyState"
-        >
-
-            <div class="empty-box">
-
-                <div class="empty-title">
-                    WorkNest WhatsApp
                 </div>
 
-                <div class="empty-text">
-                    Select a conversation from the
-                    left to view the complete
-                    message history.
+                <input
+                    id="search"
+                    class="search"
+                    type="text"
+                    placeholder="Search..."
+                    autocomplete="off"
+                >
+
+                <div
+                    class="complaint-notification"
+                    id="complaintNotification"
+                    role="status"
+                ></div>
+
+            </div>
+
+
+            <div
+                class="list"
+                id="list"
+            ></div>
+
+        </aside>
+
+
+        <main
+            class="chat"
+            id="chat"
+        >
+
+            <div
+                class="empty"
+                id="emptyState"
+            >
+
+                <div class="empty-box">
+
+                    <div class="empty-title">
+                        WorkNest WhatsApp
+                    </div>
+
+                    <div class="empty-text">
+                        Select a conversation from the
+                        left to view the complete
+                        message history.
+                    </div>
+
                 </div>
 
             </div>
 
-        </div>
+        </main>
 
-    </main>
+    </div>
 
 </div>
 
@@ -3647,14 +4132,195 @@ let bookings = [];
 
 let knownComplaintIds = new Set();
 let knownBookingIds = new Set();
+let knownConversationUpdateTimes = new Map();
 
 let hasLoadedComplaints = false;
 let hasLoadedBookings = false;
+let hasLoadedConversations = false;
 
 let selectedConversation = null;
-
 let currentView = "messages";
 
+let soundEnabled = true;
+let desktopNotifyEnabled = (typeof Notification !== "undefined" && Notification.permission === "granted");
+
+function playNotificationChime() {
+    if (!soundEnabled) return;
+    try {
+        const AudioContext = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContext) return;
+        const ctx = new AudioContext();
+        if (ctx.state === "suspended") {
+            ctx.resume();
+        }
+        const now = ctx.currentTime;
+
+        const osc1 = ctx.createOscillator();
+        const gain1 = ctx.createGain();
+        osc1.type = "sine";
+        osc1.frequency.setValueAtTime(587.33, now);
+        gain1.gain.setValueAtTime(0.18, now);
+        gain1.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
+        osc1.connect(gain1);
+        gain1.connect(ctx.destination);
+        osc1.start(now);
+        osc1.stop(now + 0.22);
+
+        const osc2 = ctx.createOscillator();
+        const gain2 = ctx.createGain();
+        osc2.type = "sine";
+        osc2.frequency.setValueAtTime(880.00, now + 0.12);
+        gain2.gain.setValueAtTime(0.22, now + 0.12);
+        gain2.gain.exponentialRampToValueAtTime(0.001, now + 0.45);
+        osc2.connect(gain2);
+        gain2.connect(ctx.destination);
+        osc2.start(now + 0.12);
+        osc2.stop(now + 0.45);
+    } catch (e) {
+        console.warn("Audio chime error:", e);
+    }
+}
+
+function sendDesktopNotification(title, body) {
+    if (!desktopNotifyEnabled) return;
+    if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+        try {
+            new Notification(title, {
+                body: body,
+                icon: "/favicon.ico"
+            });
+        } catch (e) {
+            console.warn("Desktop notification error:", e);
+        }
+    }
+}
+
+function toggleSound() {
+    soundEnabled = !soundEnabled;
+    const btn = document.getElementById("soundToggleBtn");
+    if (btn) {
+        btn.textContent = soundEnabled ? "Sound: ON" : "Sound: OFF";
+        btn.classList.toggle("active", soundEnabled);
+    }
+    showToast(soundEnabled ? "Audio notification chime enabled" : "Audio chime muted", "info");
+    if (soundEnabled) {
+        playNotificationChime();
+    }
+}
+
+async function requestDesktopNotification() {
+    if (typeof Notification === "undefined") {
+        showToast("Desktop notifications are not supported by this browser.", "error");
+        return;
+    }
+    try {
+        const permission = await Notification.requestPermission();
+        const btn = document.getElementById("notifyToggleBtn");
+        if (permission === "granted") {
+            desktopNotifyEnabled = true;
+            if (btn) {
+                btn.classList.add("active");
+                btn.textContent = "Notifications: ON";
+            }
+            showToast("Desktop notifications enabled", "success");
+            sendDesktopNotification("WorkNest Admin", "Notifications are active.");
+        } else {
+            desktopNotifyEnabled = false;
+            if (btn) {
+                btn.classList.remove("active");
+                btn.textContent = "Notifications: OFF";
+            }
+            showToast("Notifications blocked or dismissed in browser settings.", "info");
+        }
+    } catch (e) {
+        console.error(e);
+    }
+}
+
+async function logout() {
+    try {
+        await fetch("/dashboard/logout", { method: "POST" });
+    } catch (e) {}
+    window.location.href = "/dashboard/login";
+}
+
+async function loadDashboardStats() {
+    try {
+        const res = await fetch("/api/dashboard/stats");
+        if (!res.ok) return;
+        const stats = await res.json();
+        const elActive = document.getElementById("kpiActiveConversations");
+        const elPending = document.getElementById("kpiPendingBookings");
+        const elConfirmed = document.getElementById("kpiConfirmedWeek");
+        const elOpen = document.getElementById("kpiOpenComplaints");
+
+        if (elActive) elActive.textContent = stats.active_conversations ?? 0;
+        if (elPending) elPending.textContent = stats.pending_bookings ?? 0;
+        if (elConfirmed) elConfirmed.textContent = stats.confirmed_week ?? 0;
+        if (elOpen) elOpen.textContent = stats.open_complaints ?? 0;
+    } catch (e) {
+        console.error("Failed to load dashboard stats:", e);
+    }
+}
+
+function downloadCsvBlob(filename, csvContent) {
+    const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+    }, 100);
+    showToast(`Downloaded ${filename}`);
+}
+
+function exportCurrentViewCsv() {
+    const dateStr = new Date().toISOString().slice(0, 10);
+    if (currentView === "bookings") {
+        if (!bookings.length) {
+            showToast("No bookings to export.", "info");
+            return;
+        }
+        const headers = ["Booking ID", "Workspace Type", "Customer Name", "Customer Phone", "Seats", "Status", "Created At"];
+        const rows = bookings.map(b => [
+            b.booking_id || "",
+            b.workspace_type || "",
+            b.customer_name || "",
+            b.customer_phone || "",
+            b.seats || "1",
+            b.status || "pending",
+            b.created_at || ""
+        ]);
+        const csv = [headers, ...rows]
+            .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+            .join("\r\n");
+        downloadCsvBlob(`worknest_bookings_${dateStr}.csv`, csv);
+    } else if (currentView === "complaints") {
+        if (!complaints.length) {
+            showToast("No complaints to export.", "info");
+            return;
+        }
+        const headers = ["Complaint ID", "Category", "Customer Phone", "Complaint Details", "Status", "Is Follow Up", "Previous ID", "Created At"];
+        const rows = complaints.map(c => [
+            c.complaint_id || "",
+            c.category || "",
+            c.phone_number || "",
+            c.complaint || "",
+            c.status || "open",
+            c.is_followup ? "Yes" : "No",
+            c.previous_complaint_id || "",
+            c.created_at || ""
+        ]);
+        const csv = [headers, ...rows]
+            .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+            .join("\r\n");
+        downloadCsvBlob(`worknest_complaints_${dateStr}.csv`, csv);
+    }
+}
 
 function escapeHtml(value) {
 
@@ -3776,6 +4442,9 @@ function showMessages() {
     const newChatBtn = document.getElementById("newChatBtn");
     if (newChatBtn) newChatBtn.style.display = "inline-flex";
 
+    const exportBtn = document.getElementById("exportCsvBtn");
+    if (exportBtn) exportBtn.style.display = "none";
+
     document
         .getElementById("messagesTab")
         .classList.add("active");
@@ -3826,6 +4495,12 @@ function showBookings() {
     const newChatBtn = document.getElementById("newChatBtn");
     if (newChatBtn) newChatBtn.style.display = "none";
 
+    const exportBtn = document.getElementById("exportCsvBtn");
+    if (exportBtn) {
+        exportBtn.style.display = "inline-flex";
+        exportBtn.textContent = "Export Bookings CSV";
+    }
+
     document
         .getElementById("messagesTab")
         .classList.remove("active");
@@ -3875,6 +4550,12 @@ function showComplaints() {
 
     const newChatBtn = document.getElementById("newChatBtn");
     if (newChatBtn) newChatBtn.style.display = "none";
+
+    const exportBtn = document.getElementById("exportCsvBtn");
+    if (exportBtn) {
+        exportBtn.style.display = "inline-flex";
+        exportBtn.textContent = "Export Complaints CSV";
+    }
 
     document
         .getElementById("messagesTab")
@@ -4029,6 +4710,25 @@ async function loadConversations() {
         conversations =
             await response.json();
 
+        let hasNewMessage = false;
+        let latestSenderName = "";
+        conversations.forEach(conv => {
+            const prevUpdated = knownConversationUpdateTimes.get(conv.id);
+            if (hasLoadedConversations && prevUpdated && conv.updated_at && conv.updated_at > prevUpdated) {
+                hasNewMessage = true;
+                latestSenderName = conv.name || conv.phone_number || "Customer";
+            }
+            if (conv.updated_at) {
+                knownConversationUpdateTimes.set(conv.id, conv.updated_at);
+            }
+        });
+
+        if (hasLoadedConversations && hasNewMessage) {
+            playNotificationChime();
+            sendDesktopNotification("New WhatsApp Message", `New message received from ${latestSenderName}`);
+        }
+        hasLoadedConversations = true;
+
         if (
             currentView === "messages"
         ) {
@@ -4073,9 +4773,23 @@ function renderConversations() {
                         || ""
                     ).toLowerCase();
 
+                const tags =
+                    (
+                        conversation.tags
+                        || ""
+                    ).toLowerCase();
+
+                const notes =
+                    (
+                        conversation.admin_notes
+                        || ""
+                    ).toLowerCase();
+
                 return (
                     phone.includes(search)
                     || name.includes(search)
+                    || tags.includes(search)
+                    || notes.includes(search)
                 );
 
             }
@@ -4124,6 +4838,13 @@ function renderConversations() {
                     selectedConversation === id
                     ? "active"
                     : "";
+
+                const tagsStr = conversation.tags || "";
+                const tagsArr = tagsStr.split(",").map(t => t.trim()).filter(Boolean);
+                const tagsHtml = tagsArr.map(t => {
+                    const slug = t.toLowerCase().replace(/\s+/g, "-");
+                    return `<span class="tag-badge tag-${slug}">${escapeHtml(t)}</span>`;
+                }).join("");
 
                 return `
 
@@ -4174,6 +4895,8 @@ function renderConversations() {
                                     phone
                                 )}
                             </div>
+
+                            ${tagsHtml ? `<div style="margin-top: 3px;">${tagsHtml}</div>` : ""}
 
                         </div>
 
@@ -4251,6 +4974,14 @@ async function loadMessages(
             conversation.phone_number
             || "";
 
+        const tagsStr = conversation.tags || "";
+        const tagsArr = tagsStr.split(",").map(t => t.trim()).filter(Boolean);
+        const hasHotLead = tagsArr.includes("Hot Lead");
+        const hasCorporate = tagsArr.includes("Corporate");
+        const hasDayPass = tagsArr.includes("Day Pass");
+        const hasActiveMember = tagsArr.includes("Active Member");
+        const adminNotes = conversation.admin_notes || "";
+
         const chat =
             document.getElementById(
                 "chat"
@@ -4281,6 +5012,34 @@ async function loadMessages(
 
                 </div>
 
+            </div>
+
+            <div class="contact-meta-box" id="contactMetaBox_${conversationId}">
+                <div style="display: flex; align-items: center; gap: 6px; flex-wrap: wrap;">
+                    <span style="font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; margin-right: 4px;">Tags:</span>
+                    <span class="tag-chip ${hasHotLead ? 'selected-hot-lead' : ''}" onclick="toggleContactTag(${conversationId}, 'Hot Lead')">Hot Lead</span>
+                    <span class="tag-chip ${hasCorporate ? 'selected-corporate' : ''}" onclick="toggleContactTag(${conversationId}, 'Corporate')">Corporate</span>
+                    <span class="tag-chip ${hasDayPass ? 'selected-day-pass' : ''}" onclick="toggleContactTag(${conversationId}, 'Day Pass')">Day Pass</span>
+                    <span class="tag-chip ${hasActiveMember ? 'selected-active-member' : ''}" onclick="toggleContactTag(${conversationId}, 'Active Member')">Active Member</span>
+                </div>
+                <div style="display: flex; align-items: center; gap: 8px; flex: 1; min-width: 260px; max-width: 520px;">
+                    <input
+                        id="contactNotesInput_${conversationId}"
+                        class="search"
+                        style="height: 32px; font-size: 12px; margin-bottom: 0;"
+                        placeholder="Internal admin notes (e.g. Wants 5 dedicated desks)..."
+                        value="${escapeHtml(adminNotes)}"
+                        onkeydown="if(event.key==='Enter') saveContactNotes(${conversationId})"
+                    >
+                    <button
+                        type="button"
+                        class="status-btn"
+                        style="padding: 6px 14px; font-size: 11px; height: 32px; background: var(--orange); color: white;"
+                        onclick="saveContactNotes(${conversationId})"
+                    >
+                        Save Note
+                    </button>
+                </div>
             </div>
 
             <div
@@ -4410,6 +5169,64 @@ async function loadMessages(
 
         console.error(error);
 
+    }
+}
+
+
+async function toggleContactTag(conversationId, tag) {
+    const conv = conversations.find(c => c.id === conversationId);
+    if (!conv) return;
+
+    let currentTags = (conv.tags || "").split(",").map(t => t.trim()).filter(Boolean);
+    const index = currentTags.indexOf(tag);
+    if (index >= 0) {
+        currentTags.splice(index, 1);
+    } else {
+        currentTags.push(tag);
+    }
+
+    const updatedTags = currentTags.join(", ");
+    try {
+        const res = await fetch(`/api/contacts/${conversationId}/meta`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ tags: updatedTags })
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.error || "Failed to update tag");
+        }
+        conv.tags = updatedTags;
+        showToast(`Tag ${index >= 0 ? "removed" : "added"}: ${tag}`);
+        renderConversations();
+        await loadMessages(conversationId, conv);
+    } catch (err) {
+        console.error(err);
+        showToast(`Error: ${err.message}`, "error");
+    }
+}
+
+async function saveContactNotes(conversationId) {
+    const conv = conversations.find(c => c.id === conversationId);
+    const input = document.getElementById(`contactNotesInput_${conversationId}`);
+    if (!input || !conv) return;
+
+    const note = input.value.trim();
+    try {
+        const res = await fetch(`/api/contacts/${conversationId}/meta`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ admin_notes: note })
+        });
+        if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.error || "Failed to save note");
+        }
+        conv.admin_notes = note;
+        showToast("Internal admin note saved", "success");
+    } catch (err) {
+        console.error(err);
+        showToast(`Error: ${err.message}`, "error");
     }
 }
 
@@ -4684,6 +5501,8 @@ async function loadComplaints() {
 
             if (newComplaintCount > 0) {
                 showComplaintAlert(newComplaintCount);
+                playNotificationChime();
+                sendDesktopNotification("New Complaint Received", `${newComplaintCount} new customer complaint(s) received.`);
             }
         }
 
@@ -5020,6 +5839,8 @@ async function loadBookings() {
 
             if (newBookingCount > 0) {
                 showBookingAlert(newBookingCount);
+                playNotificationChime();
+                sendDesktopNotification("New Booking Received", `${newBookingCount} new workspace reservation(s) received.`);
             }
         }
 
@@ -5473,6 +6294,8 @@ document
 
 async function refresh() {
 
+    await loadDashboardStats();
+
     await loadConversations();
 
     await loadBookings();
@@ -5508,6 +6331,8 @@ async function refresh() {
 /* =========================================================
    Initial Load
    ========================================================= */
+
+loadDashboardStats();
 
 loadConversations();
 
