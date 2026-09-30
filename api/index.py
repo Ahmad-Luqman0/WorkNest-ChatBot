@@ -1077,8 +1077,8 @@ async def root():
     return {"status": "online", "service": "WorkNest WhatsApp Chatbot"}
 
 
-@app.get("/privacy", response_class=HTMLResponse)
-@app.get("/data-deletion", response_class=HTMLResponse)
+@app.api_route("/privacy", methods=["GET", "HEAD"], response_class=HTMLResponse)
+@app.api_route("/data-deletion", methods=["GET", "HEAD"], response_class=HTMLResponse)
 async def privacy_policy():
     return """<!DOCTYPE html>
 <html lang="en">
