@@ -2135,6 +2135,7 @@ async def get_bookings():
                     "workspace_type": booking.get("workspace_type"),
                     "customer_name": booking.get("customer_name") or contact.get("name"),
                     "customer_phone": booking.get("customer_phone") or contact.get("phone_number"),
+                    "whatsapp_phone": contact.get("phone_number"),
                     "seats": booking.get("seats"),
                     "status": booking.get("status", "pending"),
                     "notes": booking.get("notes"),
@@ -5263,7 +5264,14 @@ function selectBooking(bookingId) {
 
     const status = booking.status || "pending";
     const chat = document.getElementById("chat");
-    const cleanPhone = (booking.customer_phone || "").replace(/[^0-9]/g, "");
+
+    let targetPhone = booking.whatsapp_phone || booking.customer_phone || "";
+    let cleanPhone = targetPhone.replace(/[^0-9]/g, "");
+    if (cleanPhone.startsWith("00")) {
+        cleanPhone = cleanPhone.slice(2);
+    } else if (cleanPhone.startsWith("0") && cleanPhone.length === 11) {
+        cleanPhone = "92" + cleanPhone.slice(1);
+    }
 
     chat.innerHTML = `
         <div class="chat-header">
@@ -5297,7 +5305,7 @@ function selectBooking(bookingId) {
                     <span>
                         ${escapeHtml(booking.customer_phone || 'N/A')}
                         ${cleanPhone ? `<a href="https://wa.me/${cleanPhone}" target="_blank" style="margin-left: 10px; color: var(--green); text-decoration: none; font-weight: 700;">Open in WhatsApp</a>` : ''}
-                        ${cleanPhone ? `<button type="button" onclick="chatWithCustomer('${escapeHtml(booking.customer_phone || '')}', '${escapeHtml(booking.customer_name || '')}')" style="margin-left: 10px; background: var(--orange); color: white; border: none; border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: 700; cursor: pointer;">Chat in Dashboard</button>` : ''}
+                        ${cleanPhone ? `<button type="button" onclick="chatWithCustomer('${cleanPhone}', '${escapeHtml(booking.customer_name || '')}')" style="margin-left: 10px; background: var(--orange); color: white; border: none; border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: 700; cursor: pointer;">Chat in Dashboard</button>` : ''}
                     </span>
 
                     <span style="color: var(--muted); font-weight: 600;">Seats / Persons:</span>
