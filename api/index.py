@@ -593,18 +593,159 @@ def send_resolved_notification(phone_number, complaint_id):
 # ============================================================
 
 
+def recover_user_state(conversation_id):
+    state_data = {"state": "main_menu", "booking": {}, "complaint": {}}
+    if not supabase or not conversation_id:
+        return state_data
+
+    try:
+        msgs_res = (
+            supabase.table("whatsapp_messages")
+            .select("direction, message_text, created_at")
+            .eq("conversation_id", conversation_id)
+            .order("created_at", desc=True)
+            .limit(10)
+            .execute()
+        )
+        messages = msgs_res.data or []
+        if not messages:
+            return state_data
+
+        valid_outgoing = []
+        for m in messages:
+            if m.get("direction") == "outgoing":
+                txt = m.get("message_text") or ""
+                if not txt.startswith("Please select a valid option"):
+                    valid_outgoing.append(txt)
+
+        if not valid_outgoing:
+            return state_data
+
+        last_prompt = valid_outgoing[0]
+        last_lower = last_prompt.lower()
+
+        completion_phrases = [
+            "booking request received",
+            "complaint registered successfully",
+            "has been cancelled",
+            "welcome to worknest",
+            "thank you for confirming",
+        ]
+        if any(cp in last_lower for cp in completion_phrases):
+            return state_data
+
+        # 1. Booking Confirmation
+        if "please confirm your booking details" in last_lower:
+            state_data["state"] = "booking_confirmation"
+            ws = re.search(r"Workspace:\s*([^\n]+)", last_prompt)
+            nm = re.search(r"Name:\s*([^\n]+)", last_prompt)
+            ph = re.search(r"Phone:\s*([^\n]+)", last_prompt)
+            st = re.search(r"Seats / Persons:\s*([^\n]+)", last_prompt)
+            if ws:
+                state_data["booking"]["workspace_type"] = ws.group(1).strip()
+            if nm:
+                state_data["booking"]["name"] = nm.group(1).strip()
+            if ph:
+                state_data["booking"]["phone"] = ph.group(1).strip()
+            if st:
+                state_data["booking"]["seats"] = st.group(1).strip()
+            return state_data
+
+        # 2. Booking Seats
+        if "seats / persons required" in last_lower or "number of seats" in last_lower:
+            state_data["state"] = "booking_seats"
+            for p in valid_outgoing:
+                if "thank you," in p.lower():
+                    nm = re.search(r"Thank you,\s*([^\n!]+)", p)
+                    if nm:
+                        state_data["booking"]["name"] = nm.group(1).strip()
+                if "selected:" in p.lower():
+                    ws = re.search(r"Selected:\s*([^\n]+)", p)
+                    if ws:
+                        state_data["booking"]["workspace_type"] = ws.group(1).strip()
+            for m in messages:
+                if m.get("direction") == "incoming":
+                    cand = re.sub(r"[^\d+]", "", m.get("message_text") or "")
+                    if len(cand) >= 7:
+                        state_data["booking"]["phone"] = m.get("message_text", "").strip()
+                        break
+            return state_data
+
+        # 3. Booking Phone
+        if "contact phone number" in last_lower:
+            state_data["state"] = "booking_phone"
+            nm = re.search(r"Thank you,\s*([^\n!]+)", last_prompt)
+            if nm:
+                state_data["booking"]["name"] = nm.group(1).strip()
+            for p in valid_outgoing:
+                if "selected:" in p.lower():
+                    ws = re.search(r"Selected:\s*([^\n]+)", p)
+                    if ws:
+                        state_data["booking"]["workspace_type"] = ws.group(1).strip()
+                        break
+            return state_data
+
+        # 4. Booking Name
+        if "please enter your full name" in last_lower:
+            state_data["state"] = "booking_name"
+            ws = re.search(r"Selected:\s*([^\n]+)", last_prompt)
+            if ws:
+                state_data["booking"]["workspace_type"] = ws.group(1).strip()
+            return state_data
+
+        # 5. Booking Type
+        if "please select a workspace type" in last_lower:
+            state_data["state"] = "booking_type"
+            return state_data
+
+        # 6. Booking Lookup
+        if "booking id to check your reservation" in last_lower:
+            state_data["state"] = "booking_lookup"
+            return state_data
+
+        # 7. Complaint Details
+        if "describe your complaint" in last_lower:
+            state_data["state"] = "complaint_details"
+            cat = re.search(r"Selected Category:\s*([^\n]+)", last_prompt)
+            if cat:
+                state_data["complaint"]["category"] = cat.group(1).strip()
+            return state_data
+
+        # 8. Complaint Category
+        if "submit a complaint" in last_lower and "select a category" in last_lower:
+            state_data["state"] = "complaint_category"
+            return state_data
+
+        # 9. Track Complaint
+        if "complaint id you would like to track" in last_lower:
+            state_data["state"] = "track_complaint"
+            return state_data
+
+    except Exception as e:
+        print("Error recovering user state:", e)
+
+    return state_data
+
+
 def chatbot(user_id, message, contact_id=None, conversation_id=None):
 
     message = message.strip()
     lower_message = message.lower()
 
     # --------------------------------------------------------
-    # Initialize user state
+    # Initialize user state (with serverless recovery)
     # --------------------------------------------------------
 
     if user_id not in user_states:
-
         user_states[user_id] = {"state": "main_menu", "booking": {}, "complaint": {}}
+        if conversation_id and supabase:
+            recovered = recover_user_state(conversation_id)
+            if recovered and recovered.get("state") != "main_menu":
+                user_states[user_id] = recovered
+    elif user_states[user_id].get("state") == "main_menu" and conversation_id and supabase:
+        recovered = recover_user_state(conversation_id)
+        if recovered and recovered.get("state") != "main_menu":
+            user_states[user_id] = recovered
 
     state_data = user_states[user_id]
     state = state_data["state"]
