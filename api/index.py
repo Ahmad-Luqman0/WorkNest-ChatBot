@@ -363,6 +363,54 @@ def create_complaint(
 
 
 # ============================================================
+# Create Booking
+# ============================================================
+
+
+def create_booking(
+    booking_id,
+    workspace_type,
+    customer_name=None,
+    customer_phone=None,
+    seats=None,
+    contact_id=None,
+    conversation_id=None,
+    status="pending",
+):
+    if not supabase:
+        return None
+
+    try:
+        result = (
+            supabase.table("bookings")
+            .insert(
+                {
+                    "booking_id": booking_id,
+                    "contact_id": contact_id,
+                    "conversation_id": conversation_id,
+                    "workspace_type": workspace_type,
+                    "customer_name": customer_name,
+                    "customer_phone": customer_phone,
+                    "seats": str(seats) if seats else None,
+                    "status": status,
+                    "created_at": utc_now(),
+                    "updated_at": utc_now(),
+                }
+            )
+            .execute()
+        )
+
+        if result.data:
+            return result.data[0]
+
+    except Exception as e:
+        print("Booking creation error:", e)
+
+    return None
+
+
+# ============================================================
+
 # WhatsApp Send Message
 # ============================================================
 
@@ -817,6 +865,17 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
 
             state_data["state"] = "main_menu"
 
+            create_booking(
+                booking_id=booking_id,
+                workspace_type=booking.get("workspace_type", ""),
+                customer_name=booking.get("name", ""),
+                customer_phone=booking.get("phone", ""),
+                seats=booking.get("seats", ""),
+                contact_id=contact_id,
+                conversation_id=conversation_id,
+                status="pending",
+            )
+
             if contact_id and supabase and booking.get("name"):
                 try:
                     supabase.table("whatsapp_contacts").update({
@@ -858,16 +917,44 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
 
     if state == "booking_lookup":
 
-        booking_id = message.upper()
+        booking_id = message.upper().strip()
 
         state_data["state"] = "main_menu"
 
+        booking_details = None
+        if supabase:
+            try:
+                res = (
+                    supabase.table("bookings")
+                    .select("*")
+                    .eq("booking_id", booking_id)
+                    .limit(1)
+                    .execute()
+                )
+                if res.data:
+                    booking_details = res.data[0]
+            except Exception as e:
+                print("Error looking up booking:", e)
+
+        if booking_details:
+            return (
+                "WorkNest Booking Found!\n\n"
+                f"Booking ID: {booking_details.get('booking_id')}\n"
+                f"Workspace: {booking_details.get('workspace_type', 'N/A')}\n"
+                f"Name: {booking_details.get('customer_name') or 'N/A'}\n"
+                f"Phone: {booking_details.get('customer_phone') or 'N/A'}\n"
+                f"Seats: {booking_details.get('seats') or 'N/A'}\n"
+                f"Status: {booking_details.get('status', 'pending').capitalize()}\n\n"
+                "Type 0 to return to the main menu."
+            )
+
         return (
             f"Booking ID: {booking_id}\n\n"
-            "Your booking lookup request has been received.\n\n"
-            "Booking lookup has not been connected yet.\n\n"
+            "No booking was found with this ID.\n"
+            "Please check your ID or contact reception.\n\n"
             "Type 0 to return to the main menu."
         )
+
 
     # ========================================================
     # PRICING
@@ -1703,6 +1790,123 @@ async def update_complaint_status(complaint_id: str, request: Request):
 
 
 # ============================================================
+# Dashboard - Bookings API
+# ============================================================
+
+
+@app.get("/api/bookings")
+async def get_bookings():
+
+    if not supabase:
+        return JSONResponse(
+            {"error": "Supabase is not configured"},
+            status_code=500,
+        )
+
+    try:
+        result = (
+            supabase.table("bookings")
+            .select(
+                "id,"
+                "booking_id,"
+                "workspace_type,"
+                "customer_name,"
+                "customer_phone,"
+                "seats,"
+                "status,"
+                "notes,"
+                "contact_id,"
+                "conversation_id,"
+                "created_at,"
+                "updated_at,"
+                "whatsapp_contacts("
+                "phone_number,"
+                "name"
+                ")"
+            )
+            .order("created_at", desc=True)
+            .execute()
+        )
+
+        bookings = []
+
+        for booking in result.data or []:
+            contact = booking.get("whatsapp_contacts") or {}
+
+            bookings.append(
+                {
+                    "id": booking.get("id"),
+                    "booking_id": booking.get("booking_id"),
+                    "workspace_type": booking.get("workspace_type"),
+                    "customer_name": booking.get("customer_name") or contact.get("name"),
+                    "customer_phone": booking.get("customer_phone") or contact.get("phone_number"),
+                    "seats": booking.get("seats"),
+                    "status": booking.get("status", "pending"),
+                    "notes": booking.get("notes"),
+                    "contact_id": booking.get("contact_id"),
+                    "conversation_id": booking.get("conversation_id"),
+                    "created_at": booking.get("created_at"),
+                    "updated_at": booking.get("updated_at"),
+                }
+            )
+
+        return bookings
+
+    except Exception as e:
+        print("Bookings API error:", e)
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
+@app.patch("/api/bookings/{booking_id}/status")
+async def update_booking_status(booking_id: str, request: Request):
+
+    if not supabase:
+        return JSONResponse(
+            {"error": "Supabase is not configured"},
+            status_code=500,
+        )
+
+    body = await request.json()
+    new_status = body.get("status")
+
+    allowed_statuses = {
+        "pending",
+        "confirmed",
+        "cancelled",
+        "completed",
+    }
+
+    if new_status not in allowed_statuses:
+        return JSONResponse(
+            {
+                "error": (
+                    f"Invalid status '{new_status}'. Allowed values: "
+                    f"{', '.join(sorted(allowed_statuses))}"
+                )
+            },
+            status_code=400,
+        )
+
+    result = (
+        supabase.table("bookings")
+        .update({"status": new_status, "updated_at": utc_now()})
+        .eq("booking_id", booking_id)
+        .execute()
+    )
+
+    if not result.data:
+        return JSONResponse(
+            {"error": f"Booking '{booking_id}' was not found."},
+            status_code=404,
+        )
+
+    return {
+        "success": True,
+        "booking": result.data[0],
+    }
+
+
+# ============================================================
 # Dashboard Authentication
 # ============================================================
 
@@ -2523,6 +2727,66 @@ body {
         #555;
 }
 
+.status-pending {
+    background: #FFF1D8;
+    color: var(--orange-dark);
+}
+
+.status-confirmed {
+    background: #E8F7EF;
+    color: var(--green);
+}
+
+.status-cancelled {
+    background: #FEECEE;
+    color: var(--red);
+}
+
+.status-completed {
+    background: #E8F0FE;
+    color: var(--blue);
+}
+
+.booking {
+    padding: 14px 16px;
+    border-bottom: 1px solid #F2F2F2;
+    cursor: pointer;
+}
+
+.booking:hover {
+    background: #FAFAFA;
+}
+
+.booking-id {
+    font-size: 13px;
+    font-weight: 800;
+    color: var(--orange-dark);
+}
+
+.booking-workspace {
+    font-size: 13px;
+    font-weight: 700;
+    margin-top: 3px;
+    color: var(--text);
+}
+
+.booking-info {
+    font-size: 12px;
+    color: var(--muted);
+    margin-top: 3px;
+}
+
+.booking-select {
+    margin-top: 8px;
+    width: 100%;
+    height: 32px;
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    background: var(--white);
+    padding: 0 7px;
+    font-size: 12px;
+}
+
 .complaint-select {
     margin-top: 8px;
 
@@ -2670,6 +2934,18 @@ body {
 
             <button
                 class="tab"
+                id="bookingsTab"
+                onclick="showBookings()"
+            >
+                Bookings
+                <span
+                    class="tab-alert"
+                    id="bookingAlert"
+                ></span>
+            </button>
+
+            <button
+                class="tab"
                 id="complaintsTab"
                 onclick="showComplaints()"
             >
@@ -2763,10 +3039,13 @@ body {
 
 let conversations = [];
 let complaints = [];
+let bookings = [];
 
 let knownComplaintIds = new Set();
+let knownBookingIds = new Set();
 
 let hasLoadedComplaints = false;
+let hasLoadedBookings = false;
 
 let selectedConversation = null;
 
@@ -2894,6 +3173,9 @@ function showMessages() {
         .getElementById("messagesTab")
         .classList.add("active");
 
+    const bookingsTab = document.getElementById("bookingsTab");
+    if (bookingsTab) bookingsTab.classList.remove("active");
+
     document
         .getElementById("complaintsTab")
         .classList.remove("active");
@@ -2926,6 +3208,53 @@ function showMessages() {
 }
 
 
+function showBookings() {
+
+    currentView = "bookings";
+
+    selectedConversation = null;
+
+    clearBookingAlert();
+
+    document
+        .getElementById("messagesTab")
+        .classList.remove("active");
+
+    const bookingsTab = document.getElementById("bookingsTab");
+    if (bookingsTab) bookingsTab.classList.add("active");
+
+    document
+        .getElementById("complaintsTab")
+        .classList.remove("active");
+
+    document
+        .getElementById("listTitle")
+        .textContent =
+        "Bookings";
+
+    document
+        .getElementById("search")
+        .placeholder =
+        "Search bookings...";
+
+    document
+        .getElementById("chat")
+        .classList.remove(
+            "mobile-visible"
+        );
+
+    document
+        .getElementById("sidebar")
+        .classList.remove(
+            "hidden"
+        );
+
+    renderBookings();
+
+    showEmptyState();
+}
+
+
 function showComplaints() {
 
     currentView = "complaints";
@@ -2937,6 +3266,9 @@ function showComplaints() {
     document
         .getElementById("messagesTab")
         .classList.remove("active");
+
+    const bookingsTab = document.getElementById("bookingsTab");
+    if (bookingsTab) bookingsTab.classList.remove("active");
 
     document
         .getElementById("complaintsTab")
@@ -2968,6 +3300,25 @@ function showComplaints() {
 
     showEmptyState();
 }
+
+
+function showBookingAlert(newCount) {
+    const alert = document.getElementById("bookingAlert");
+    if (alert) {
+        alert.textContent = newCount;
+        alert.style.display = "inline-block";
+    }
+}
+
+
+function clearBookingAlert() {
+    const alert = document.getElementById("bookingAlert");
+    if (alert) {
+        alert.textContent = "";
+        alert.style.display = "none";
+    }
+}
+
 
 
 function showComplaintAlert(newComplaintCount) {
@@ -3756,6 +4107,313 @@ async function updateComplaintStatus(
 
 
 /* =========================================================
+   Bookings
+   ========================================================= */
+
+async function loadBookings() {
+
+    try {
+
+        const response =
+            await fetch(
+                "/api/bookings"
+            );
+
+        if (response.status === 401) {
+            window.location.href = "/dashboard/login";
+            return;
+        }
+
+        if (!response.ok) {
+            throw new Error(
+                "Failed to load bookings"
+            );
+        }
+
+        bookings =
+            await response.json();
+
+        const bookingIds =
+            new Set(
+                bookings.map(
+                    b => b.booking_id
+                )
+            );
+
+        if (hasLoadedBookings) {
+            const newBookingCount =
+                bookings.filter(
+                    b =>
+                        !knownBookingIds.has(
+                            b.booking_id
+                        )
+                ).length;
+
+            if (newBookingCount > 0) {
+                showBookingAlert(newBookingCount);
+            }
+        }
+
+        knownBookingIds = bookingIds;
+        hasLoadedBookings = true;
+
+        if (
+            currentView === "bookings"
+        ) {
+            renderBookings();
+        }
+
+    } catch (error) {
+
+        console.error(error);
+
+    }
+}
+
+
+function renderBookings() {
+
+    const container =
+        document.getElementById(
+            "list"
+        );
+
+    const search =
+        document
+            .getElementById("search")
+            .value
+            .trim()
+            .toLowerCase();
+
+    const filtered =
+        bookings.filter(
+            booking => {
+
+                const id =
+                    (
+                        booking.booking_id
+                        || ""
+                    ).toLowerCase();
+
+                const type =
+                    (
+                        booking.workspace_type
+                        || ""
+                    ).toLowerCase();
+
+                const name =
+                    (
+                        booking.customer_name
+                        || ""
+                    ).toLowerCase();
+
+                const phone =
+                    (
+                        booking.customer_phone
+                        || ""
+                    ).toLowerCase();
+
+                return (
+                    id.includes(search)
+                    || type.includes(search)
+                    || name.includes(search)
+                    || phone.includes(search)
+                );
+
+            }
+        );
+
+    document
+        .getElementById("itemCount")
+        .textContent =
+        filtered.length;
+
+    if (!filtered.length) {
+
+        container.innerHTML = `
+            <div style="
+                padding:30px 20px;
+                text-align:center;
+                color:#73777D;
+                font-size:13px;
+            ">
+                No bookings found.
+            </div>
+        `;
+
+        return;
+    }
+
+    container.innerHTML =
+        filtered.map(
+            booking => {
+
+                const status =
+                    booking.status
+                    || "pending";
+
+                return `
+
+                    <div
+                        class="booking"
+                    >
+
+                        <div
+                            class="booking-id"
+                        >
+                            ${escapeHtml(
+                                booking.booking_id
+                            )}
+                        </div>
+
+                        <div
+                            class="booking-workspace"
+                        >
+                            ${escapeHtml(
+                                booking.workspace_type
+                                || "Workspace"
+                            )}
+                        </div>
+
+                        <div
+                            class="booking-info"
+                        >
+                            <strong>Name:</strong> ${escapeHtml(booking.customer_name || "N/A")}<br>
+                            <strong>Phone:</strong> ${escapeHtml(booking.customer_phone || "N/A")}<br>
+                            <strong>Seats / Persons:</strong> ${escapeHtml(booking.seats || "1")}
+                        </div>
+
+                        <div>
+                            <span
+                                class="status status-${escapeHtml(status)}"
+                            >
+                                ${escapeHtml(
+                                    status.replace(
+                                        "_",
+                                        " "
+                                    )
+                                )}
+                            </span>
+                        </div>
+
+                        <select
+                            class="booking-select"
+                            onchange="updateBookingStatus(
+                                '${escapeHtml(
+                                    booking.booking_id
+                                )}',
+                                this.value
+                            )"
+                        >
+
+                            <option
+                                value="pending"
+                                ${status === "pending"
+                                    ? "selected"
+                                    : ""}
+                            >
+                                Pending
+                            </option>
+
+                            <option
+                                value="confirmed"
+                                ${status === "confirmed"
+                                    ? "selected"
+                                    : ""}
+                            >
+                                Confirmed
+                            </option>
+
+                            <option
+                                value="completed"
+                                ${status === "completed"
+                                    ? "selected"
+                                    : ""}
+                            >
+                                Completed
+                            </option>
+
+                            <option
+                                value="cancelled"
+                                ${status === "cancelled"
+                                    ? "selected"
+                                    : ""}
+                            >
+                                Cancelled
+                            </option>
+
+                        </select>
+
+                        <div
+                            style="
+                                margin-top:7px;
+                                color:#73777D;
+                                font-size:11px;
+                            "
+                        >
+                            ${formatDate(
+                                booking.created_at
+                            )}
+                        </div>
+
+                    </div>
+
+                `;
+
+            }
+        ).join("");
+}
+
+
+async function updateBookingStatus(
+    bookingId,
+    status
+) {
+
+    try {
+
+        const response =
+            await fetch(
+                `/api/bookings/${encodeURIComponent(
+                    bookingId
+                )}/status`,
+                {
+                    method: "PATCH",
+
+                    headers: {
+                        "Content-Type":
+                            "application/json"
+                    },
+
+                    body: JSON.stringify({
+                        status: status
+                    })
+                }
+            );
+
+        if (!response.ok) {
+
+            throw new Error(
+                "Failed to update booking"
+            );
+
+        }
+
+        await loadBookings();
+
+    } catch (error) {
+
+        console.error(error);
+
+        alert(
+            "Unable to update booking status."
+        );
+
+    }
+}
+
+
+/* =========================================================
    Search
    ========================================================= */
 
@@ -3770,6 +4428,12 @@ document
             ) {
 
                 renderConversations();
+
+            } else if (
+                currentView === "bookings"
+            ) {
+
+                renderBookings();
 
             } else {
 
@@ -3788,6 +4452,8 @@ document
 async function refresh() {
 
     await loadConversations();
+
+    await loadBookings();
 
     await loadComplaints();
 
@@ -3822,6 +4488,8 @@ async function refresh() {
    ========================================================= */
 
 loadConversations();
+
+loadBookings();
 
 loadComplaints();
 
