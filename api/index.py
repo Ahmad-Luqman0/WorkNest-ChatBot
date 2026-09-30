@@ -724,102 +724,77 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
 
         state_data["booking"]["workspace_type"] = workspace_types[message]
 
-        state_data["state"] = "booking_date"
+        state_data["state"] = "booking_name"
 
         return (
             f"Selected: {workspace_types[message]}\n\n"
-            "Please enter your booking date.\n\n"
-            "Example: 25 September 2026"
+            "Please enter your Full Name.\n\n"
+            "Example: Luqman Ahmad\n\n"
+            "Type 0 for the main menu."
         )
 
     # ========================================================
-    # BOOKING DATE
+    # BOOKING NAME
     # ========================================================
 
-    if state == "booking_date":
+    if state == "booking_name":
 
-        state_data["booking"]["date"] = message
+        if len(message) < 2:
+            return "Please enter a valid full name.\n\nExample: Luqman Ahmad\n\nType 0 for the main menu."
 
-        state_data["state"] = "booking_time"
+        state_data["booking"]["name"] = message
 
-        return "Please enter your preferred start time.\n\n" "Example: 10:00 AM"
-
-    # ========================================================
-    # BOOKING TIME
-    # ========================================================
-
-    if state == "booking_time":
-
-        state_data["booking"]["time"] = message
-
-        state_data["state"] = "booking_duration"
-
-        workspace_type = state_data["booking"]["workspace_type"]
-
-        if workspace_type in {"Shared Seat", "Private Office"}:
-            return (
-                "Please enter the required duration.\n\n"
-                "Minimum duration: 1 month\n"
-                "Example: 1 month"
-            )
+        state_data["state"] = "booking_phone"
 
         return (
-            "Please enter the required duration.\n\n"
-            "Minimum duration: 1 hour\n"
-            "Example: 1 hour\n"
-            "or\n"
-            "Full day"
+            f"Thank you, {message}!\n\n"
+            "Please enter your Contact Phone Number.\n\n"
+            "Example: 03001234567\n\n"
+            "Type 0 for the main menu."
         )
 
     # ========================================================
-    # BOOKING DURATION
+    # BOOKING PHONE
     # ========================================================
 
-    if state == "booking_duration":
+    if state == "booking_phone":
 
-        workspace_type = state_data["booking"]["workspace_type"]
-        normalized_duration = message.lower()
-
-        if workspace_type in {"Shared Seat", "Private Office"}:
-            month_match = re.fullmatch(
-                r"(\d+(?:\.\d+)?)\s*(month|months|mo|mos)",
-                normalized_duration,
+        cleaned_phone = re.sub(r"[^\d+]", "", message)
+        if len(cleaned_phone) < 7:
+            return (
+                "Please enter a valid contact phone number.\n\n"
+                "Example: 03001234567\n\n"
+                "Type 0 for the main menu."
             )
 
-            if not month_match or float(month_match.group(1)) < 1:
-                return (
-                    f"{workspace_type} bookings require a minimum duration "
-                    "of 1 month.\n\n"
-                    "Example: 1 month"
-                )
+        state_data["booking"]["phone"] = message
 
-        else:
-            hour_match = re.fullmatch(
-                r"(\d+(?:\.\d+)?)\s*(hour|hours|hr|hrs)",
-                normalized_duration,
-            )
+        state_data["state"] = "booking_seats"
 
-            if normalized_duration != "full day" and (
-                not hour_match or float(hour_match.group(1)) < 1
-            ):
-                return (
-                    f"{workspace_type} bookings require a minimum duration "
-                    "of 1 hour.\n\n"
-                    "Example: 1 hour"
-                )
+        return (
+            "Please enter the number of seats / persons required.\n\n"
+            "Example: 1 (or 5)\n\n"
+            "Type 0 for the main menu."
+        )
 
-        state_data["booking"]["duration"] = message
+    # ========================================================
+    # BOOKING SEATS
+    # ========================================================
+
+    if state == "booking_seats":
+
+        state_data["booking"]["seats"] = message
 
         state_data["state"] = "booking_confirmation"
 
         booking = state_data["booking"]
 
         return (
-            "Please confirm your booking:\n\n"
-            f"Workspace: {booking['workspace_type']}\n"
-            f"Date: {booking['date']}\n"
-            f"Time: {booking['time']}\n"
-            f"Duration: {booking['duration']}\n\n"
+            "Please confirm your booking details:\n\n"
+            f"Workspace: {booking.get('workspace_type', '')}\n"
+            f"Name: {booking.get('name', '')}\n"
+            f"Phone: {booking.get('phone', '')}\n"
+            f"Seats / Persons: {booking.get('seats', '')}\n\n"
             "Reply with:\n"
             "1. Confirm\n"
             "2. Cancel\n\n"
@@ -842,16 +817,25 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
 
             state_data["state"] = "main_menu"
 
+            if contact_id and supabase and booking.get("name"):
+                try:
+                    supabase.table("whatsapp_contacts").update({
+                        "name": booking["name"],
+                        "updated_at": utc_now(),
+                    }).eq("id", contact_id).execute()
+                except Exception as e:
+                    print("Failed to update contact name from booking:", e)
+
             return (
-                "Booking request received.\n\n"
+                "Booking request received!\n\n"
                 f"Booking ID: {booking_id}\n\n"
-                f"Workspace: {booking['workspace_type']}\n"
-                f"Date: {booking['date']}\n"
-                f"Time: {booking['time']}\n"
-                f"Duration: {booking['duration']}\n\n"
-                "Our reception team will confirm "
-                "availability and finalize your booking.\n\n"
-                "Thank you for choosing WorkNest."
+                f"Workspace: {booking.get('workspace_type', '')}\n"
+                f"Name: {booking.get('name', '')}\n"
+                f"Phone: {booking.get('phone', '')}\n"
+                f"Seats / Persons: {booking.get('seats', '')}\n\n"
+                "Our reception team will contact you shortly to confirm availability and finalize your booking.\n\n"
+                "Thank you for choosing WorkNest!\n\n"
+                "Type 0 to return to the main menu."
             )
 
         if message == "2":
