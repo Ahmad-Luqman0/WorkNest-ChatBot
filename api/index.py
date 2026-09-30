@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import re
 import secrets
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Optional
@@ -2094,6 +2095,189 @@ async def start_or_get_conversation(request: Request):
         return JSONResponse(content={"error": str(e)}, status_code=500)
 
 
+@app.post("/api/broadcast")
+async def send_broadcast(request: Request):
+    if not supabase:
+        return JSONResponse(
+            content={"error": "Supabase is not configured"}, status_code=500
+        )
+
+    try:
+        body = await request.json()
+        message_text = (body.get("message") or "").strip()
+        target_tag = (body.get("tag") or "all").strip()
+
+        if not message_text:
+            return JSONResponse(
+                content={"error": "Broadcast message cannot be empty"}, status_code=400
+            )
+
+        conv_res = (
+            supabase.table("whatsapp_conversations")
+            .select(
+                "id, contact_id, status, whatsapp_contacts(id, phone_number, name, tags)"
+            )
+            .execute()
+        )
+
+        all_conversations = conv_res.data or []
+        target_items = []
+        seen_phones = set()
+
+        for c in all_conversations:
+            contact = c.get("whatsapp_contacts") or {}
+            raw_phone = contact.get("phone_number") or ""
+            clean_phone = re.sub(r"[^\d]", "", str(raw_phone))
+            if clean_phone.startswith("0") and len(clean_phone) == 11:
+                clean_phone = "92" + clean_phone[1:]
+            elif clean_phone.startswith("00"):
+                clean_phone = clean_phone[2:]
+
+            if not clean_phone or clean_phone in seen_phones:
+                continue
+
+            contact_tags = (contact.get("tags") or "").lower()
+            if target_tag != "all":
+                if target_tag.lower() not in contact_tags:
+                    continue
+
+            seen_phones.add(clean_phone)
+            target_items.append(
+                {
+                    "conversation_id": c.get("id"),
+                    "contact_id": contact.get("id"),
+                    "phone": clean_phone,
+                    "name": contact.get("name") or "Valued Customer",
+                }
+            )
+
+        if not target_items:
+            return JSONResponse(
+                content={
+                    "error": f"No contacts found for the selected audience ('{target_tag}')"
+                },
+                status_code=400,
+            )
+
+        sent_count = 0
+        failed_count = 0
+        results = []
+
+        for item in target_items:
+            phone = item["phone"]
+            conv_id = item["conversation_id"]
+            name = item["name"]
+
+            # Check 24h window
+            last_incoming = (
+                supabase.table("whatsapp_messages")
+                .select("created_at")
+                .eq("conversation_id", conv_id)
+                .eq("direction", "incoming")
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+            )
+
+            within_24h = False
+            if last_incoming.data:
+                last_time_str = last_incoming.data[0].get("created_at")
+                if last_time_str:
+                    try:
+                        last_dt = datetime.fromisoformat(
+                            last_time_str.replace("Z", "+00:00")
+                        )
+                        diff = (
+                            datetime.now(timezone.utc) - last_dt
+                        ).total_seconds()
+                        if diff <= 86400:
+                            within_24h = True
+                    except Exception:
+                        pass
+
+            method_used = "text"
+            api_response = None
+
+            if within_24h:
+                api_response = send_whatsapp_text(phone, message_text)
+                if not api_response.ok:
+                    err_text = api_response.text
+                    if "131047" in err_text or "24 hours" in err_text.lower():
+                        method_used = "template"
+                        api_response = send_whatsapp_template(
+                            phone,
+                            template_name="worknest_agent_message",
+                            language_code="en_US",
+                            body_parameters=[name, message_text],
+                        )
+            else:
+                method_used = "template"
+                api_response = send_whatsapp_template(
+                    phone,
+                    template_name="worknest_agent_message",
+                    language_code="en_US",
+                    body_parameters=[name, message_text],
+                )
+
+            if api_response and api_response.ok:
+                sent_count += 1
+                res_json = {}
+                try:
+                    res_json = api_response.json()
+                except Exception:
+                    pass
+                messages_list = res_json.get("messages", [])
+                wamid = messages_list[0].get("id") if messages_list else None
+
+                supabase.table("whatsapp_messages").insert(
+                    {
+                        "conversation_id": conv_id,
+                        "whatsapp_message_id": wamid,
+                        "direction": "outgoing",
+                        "message_type": method_used,
+                        "message_text": message_text,
+                    }
+                ).execute()
+
+                supabase.table("whatsapp_conversations").update(
+                    {"updated_at": utc_now()}
+                ).eq("id", conv_id).execute()
+
+                results.append(
+                    {
+                        "phone": phone,
+                        "name": name,
+                        "status": "sent",
+                        "method": method_used,
+                    }
+                )
+            else:
+                failed_count += 1
+                err_text = api_response.text if api_response else "Failed to send"
+                results.append(
+                    {
+                        "phone": phone,
+                        "name": name,
+                        "status": "failed",
+                        "error": err_text[:120],
+                    }
+                )
+
+            time.sleep(0.1)
+
+        return {
+            "success": True,
+            "total": len(target_items),
+            "sent": sent_count,
+            "failed": failed_count,
+            "results": results,
+        }
+
+    except Exception as e:
+        print("Broadcast error:", e)
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
 # ============================================================
 # Dashboard - Complaints API
 # ============================================================
@@ -3937,6 +4121,72 @@ body {
     </div>
 </div>
 
+<div id="broadcastModal" class="modal-overlay" style="display: none;" onclick="if(event.target===this) closeBroadcastModal()">
+    <div class="modal-box" style="max-width: 560px;">
+        <div class="modal-header">
+            <div>
+                <h3 style="margin: 0; font-size: 16px; font-weight: 750; color: var(--text);">Broadcast Announcement</h3>
+                <div style="font-size: 12px; color: var(--muted); margin-top: 2px;">Send an Eid greeting, holiday update, or marketing offer to your contacts</div>
+            </div>
+            <button type="button" onclick="closeBroadcastModal()" style="background: none; border: none; font-size: 20px; line-height: 1; cursor: pointer; color: var(--muted);">&times;</button>
+        </div>
+        <div style="margin-top: 16px; display: flex; flex-direction: column; gap: 14px;">
+            <div>
+                <label style="display: block; font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 5px;">Target Audience</label>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <select id="broadcastAudience" class="search" style="height: 38px; flex: 1;" onchange="updateBroadcastRecipientCount()">
+                        <option value="all">All Contacts / All Conversations</option>
+                        <option value="Hot Lead">Hot Lead only</option>
+                        <option value="Corporate">Corporate only</option>
+                        <option value="Day Pass">Day Pass only</option>
+                        <option value="Active Member">Active Member only</option>
+                    </select>
+                    <span id="broadcastRecipientCount" style="font-size: 12px; font-weight: 700; color: var(--text); background: #F3F4F6; padding: 8px 12px; border-radius: 6px; white-space: nowrap;">
+                        0 recipients
+                    </span>
+                </div>
+            </div>
+
+            <div>
+                <label style="display: block; font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 5px;">Quick Templates (Click to fill)</label>
+                <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                    <button type="button" class="tag-chip" onclick="fillBroadcastTemplate('eid')">Eid Mubarak</button>
+                    <button type="button" class="tag-chip" onclick="fillBroadcastTemplate('weekend')">Weekend Pass Offer</button>
+                    <button type="button" class="tag-chip" onclick="fillBroadcastTemplate('amenities')">New Amenities</button>
+                    <button type="button" class="tag-chip" onclick="fillBroadcastTemplate('hours')">Holiday Hours</button>
+                </div>
+            </div>
+
+            <div>
+                <label style="display: block; font-size: 12px; font-weight: 700; color: var(--muted); margin-bottom: 5px;">Broadcast Message *</label>
+                <textarea id="broadcastMessage" class="chat-composer-textarea" rows="4" placeholder="Type your broadcast message here..." oninput="updateBroadcastCharCount()"></textarea>
+                <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 4px;">
+                    <span>Message will be saved to each customer's conversation history</span>
+                    <span id="broadcastCharCount">0 characters</span>
+                </div>
+            </div>
+
+            <div style="background: #F8FAFC; border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; font-size: 12px; color: #475569; line-height: 1.45;">
+                <strong>Delivery Notice:</strong> Customers active within 24 hours receive direct text. Contacts outside 24 hours are delivered via pre-approved template in accordance with WhatsApp Business policies.
+            </div>
+
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <input type="checkbox" id="broadcastConfirmCheck" style="width: 16px; height: 16px; cursor: pointer;">
+                <label for="broadcastConfirmCheck" style="font-size: 12px; font-weight: 600; color: var(--text); cursor: pointer;">
+                    I confirm sending this announcement to all selected contacts
+                </label>
+            </div>
+
+            <div id="broadcastStatus" style="font-size: 12px; font-weight: 600; min-height: 18px;"></div>
+
+            <div style="display: flex; justify-content: flex-end; gap: 10px; margin-top: 4px;">
+                <button type="button" onclick="closeBroadcastModal()" class="status-btn" style="background: #E5E7EB; color: #374151;">Cancel</button>
+                <button type="button" id="broadcastSubmitBtn" onclick="submitBroadcast()" class="chat-composer-btn" style="height: 38px;">Send Broadcast</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <div class="app">
 
     <header class="top-nav">
@@ -3968,6 +4218,9 @@ body {
         </div>
 
         <div class="top-nav-right">
+            <button id="broadcastBtn" class="nav-control-btn active" style="background: var(--orange-light); color: var(--orange-dark); border-color: var(--orange);" onclick="openBroadcastModal()" title="Broadcast announcement or marketing message to contacts">
+                Broadcast
+            </button>
             <button id="soundToggleBtn" class="nav-control-btn active" onclick="toggleSound()" title="Toggle notification sound chime">
                 Sound: ON
             </button>
@@ -4045,6 +4298,15 @@ body {
                     </div>
 
                     <div style="display: flex; align-items: center; gap: 6px;">
+                        <button
+                            id="sidebarBroadcastBtn"
+                            class="export-btn"
+                            style="background: #FFF7ED; color: var(--orange-dark); border-color: var(--orange);"
+                            onclick="openBroadcastModal()"
+                            title="Send broadcast marketing or holiday greeting message"
+                        >
+                            Broadcast
+                        </button>
                         <button
                             id="newChatBtn"
                             class="new-chat-btn"
@@ -4442,6 +4704,9 @@ function showMessages() {
     const newChatBtn = document.getElementById("newChatBtn");
     if (newChatBtn) newChatBtn.style.display = "inline-flex";
 
+    const sidebarBroadcastBtn = document.getElementById("sidebarBroadcastBtn");
+    if (sidebarBroadcastBtn) sidebarBroadcastBtn.style.display = "inline-flex";
+
     const exportBtn = document.getElementById("exportCsvBtn");
     if (exportBtn) exportBtn.style.display = "none";
 
@@ -4494,6 +4759,9 @@ function showBookings() {
 
     const newChatBtn = document.getElementById("newChatBtn");
     if (newChatBtn) newChatBtn.style.display = "none";
+
+    const sidebarBroadcastBtn = document.getElementById("sidebarBroadcastBtn");
+    if (sidebarBroadcastBtn) sidebarBroadcastBtn.style.display = "none";
 
     const exportBtn = document.getElementById("exportCsvBtn");
     if (exportBtn) {
@@ -4550,6 +4818,9 @@ function showComplaints() {
 
     const newChatBtn = document.getElementById("newChatBtn");
     if (newChatBtn) newChatBtn.style.display = "none";
+
+    const sidebarBroadcastBtn = document.getElementById("sidebarBroadcastBtn");
+    if (sidebarBroadcastBtn) sidebarBroadcastBtn.style.display = "none";
 
     const exportBtn = document.getElementById("exportCsvBtn");
     if (exportBtn) {
@@ -5413,6 +5684,133 @@ async function submitNewChat() {
         console.error(err);
         submitBtn.disabled = false;
         submitBtn.textContent = "Send Message";
+        if (status) {
+            status.style.color = "#DC3545";
+            status.textContent = err.message;
+        }
+        showToast(err.message, "error");
+    }
+}
+
+function openBroadcastModal() {
+    const modal = document.getElementById("broadcastModal");
+    if (!modal) return;
+    document.getElementById("broadcastAudience").value = "all";
+    document.getElementById("broadcastMessage").value = "";
+    document.getElementById("broadcastConfirmCheck").checked = false;
+    const status = document.getElementById("broadcastStatus");
+    if (status) status.textContent = "";
+    updateBroadcastCharCount();
+    updateBroadcastRecipientCount();
+    modal.style.display = "flex";
+    document.getElementById("broadcastMessage").focus();
+}
+
+function closeBroadcastModal() {
+    const modal = document.getElementById("broadcastModal");
+    if (modal) modal.style.display = "none";
+}
+
+function updateBroadcastRecipientCount() {
+    const audience = document.getElementById("broadcastAudience").value;
+    const countEl = document.getElementById("broadcastRecipientCount");
+    if (!countEl) return;
+
+    let targetCount = 0;
+    if (audience === "all") {
+        targetCount = conversations.length;
+    } else {
+        const lowerAudience = audience.toLowerCase();
+        targetCount = conversations.filter(c => (c.tags || "").toLowerCase().includes(lowerAudience)).length;
+    }
+
+    countEl.textContent = `${targetCount} recipient${targetCount === 1 ? "" : "s"}`;
+}
+
+function updateBroadcastCharCount() {
+    const textarea = document.getElementById("broadcastMessage");
+    const charEl = document.getElementById("broadcastCharCount");
+    if (!textarea || !charEl) return;
+    charEl.textContent = `${textarea.value.length} characters`;
+}
+
+function fillBroadcastTemplate(templateKey) {
+    const textarea = document.getElementById("broadcastMessage");
+    if (!textarea) return;
+
+    const templates = {
+        eid: "WorkNest wishes you and your family a very blessed and peaceful Eid Mubarak! May this joyful occasion bring prosperity and happiness. We look forward to seeing you at WorkNest soon.",
+        weekend: "WorkNest Weekend Pass Offer: Book your dedicated shared desk this weekend and receive a 20% discount on day passes. Fiber internet, power backup, and fresh coffee included. Reply to reserve.",
+        amenities: "Exciting update from WorkNest! We have completed major upgrades to our workspace, including enhanced power backup, quiet private calling pods, and upgraded meeting room displays. Visit us today!",
+        hours: "WorkNest Holiday Schedule: Front reception will be operating on adjusted holiday hours this week. 24/7 access remains active for all registered members. Contact us here for any queries."
+    };
+
+    if (templates[templateKey]) {
+        textarea.value = templates[templateKey];
+        updateBroadcastCharCount();
+        textarea.focus();
+    }
+}
+
+async function submitBroadcast() {
+    const textarea = document.getElementById("broadcastMessage");
+    const audienceSelect = document.getElementById("broadcastAudience");
+    const confirmCheck = document.getElementById("broadcastConfirmCheck");
+    const submitBtn = document.getElementById("broadcastSubmitBtn");
+    const status = document.getElementById("broadcastStatus");
+
+    const message = (textarea.value || "").trim();
+    const audience = audienceSelect.value;
+
+    if (!message) {
+        if (status) {
+            status.style.color = "#DC3545";
+            status.textContent = "Please enter a message to broadcast.";
+        }
+        textarea.focus();
+        return;
+    }
+
+    if (!confirmCheck.checked) {
+        if (status) {
+            status.style.color = "#DC3545";
+            status.textContent = "Please check the confirmation box before sending.";
+        }
+        confirmCheck.focus();
+        return;
+    }
+
+    submitBtn.disabled = true;
+    submitBtn.textContent = "Broadcasting...";
+    if (status) {
+        status.style.color = "var(--muted)";
+        status.textContent = "Delivering broadcast to selected contacts...";
+    }
+
+    try {
+        const response = await fetch("/api/broadcast", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: message, tag: audience })
+        });
+
+        const data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || "Failed to send broadcast");
+        }
+
+        closeBroadcastModal();
+        const successNotice = `Broadcast completed: ${data.sent} sent, ${data.failed} failed out of ${data.total} contacts.`;
+        showToast(successNotice, data.failed > 0 ? "info" : "success");
+
+        await loadConversations();
+        await loadDashboardStats();
+
+    } catch (err) {
+        console.error(err);
+        submitBtn.disabled = false;
+        submitBtn.textContent = "Send Broadcast";
         if (status) {
             status.style.color = "#DC3545";
             status.textContent = err.message;
