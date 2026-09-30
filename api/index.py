@@ -1929,7 +1929,7 @@ async def update_booking_status(booking_id: str, request: Request):
 
                 if new_status == "confirmed":
                     msg = (
-                        "🎉 WorkNest Booking Confirmed!\n\n"
+                        "WorkNest Booking Confirmed\n\n"
                         f"Dear {cust_name},\n"
                         f"Your booking {booking_id} for {ws} has been confirmed.\n\n"
                         "We look forward to welcoming you at WorkNest!\n"
