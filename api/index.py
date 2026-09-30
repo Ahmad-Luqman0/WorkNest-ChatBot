@@ -1077,6 +1077,153 @@ async def root():
     return {"status": "online", "service": "WorkNest WhatsApp Chatbot"}
 
 
+@app.get("/privacy", response_class=HTMLResponse)
+@app.get("/data-deletion", response_class=HTMLResponse)
+async def privacy_policy():
+    return """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy & Data Deletion - WorkNest Bot</title>
+    <style>
+        :root {
+            --primary: #10b981;
+            --primary-dark: #059669;
+            --bg: #0f172a;
+            --card-bg: #1e293b;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --border: #334155;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg);
+            color: var(--text-main);
+            line-height: 1.7;
+            padding: 40px 20px;
+        }
+        .container {
+            max-width: 820px;
+            margin: 0 auto;
+            background: var(--card-bg);
+            padding: 40px;
+            border-radius: 16px;
+            border: 1px solid var(--border);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.3);
+        }
+        .badge {
+            display: inline-block;
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--primary);
+            padding: 4px 12px;
+            border-radius: 9999px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+        h1 {
+            font-size: 2rem;
+            color: #ffffff;
+            margin-bottom: 8px;
+        }
+        .updated {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            margin-bottom: 30px;
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 16px;
+        }
+        h2 {
+            font-size: 1.25rem;
+            color: #ffffff;
+            margin-top: 28px;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        p, li {
+            color: var(--text-muted);
+            font-size: 0.975rem;
+            margin-bottom: 12px;
+        }
+        ul {
+            padding-left: 20px;
+            margin-bottom: 16px;
+        }
+        .highlight-box {
+            background: rgba(16, 185, 129, 0.08);
+            border-left: 4px solid var(--primary);
+            padding: 16px 20px;
+            border-radius: 0 8px 8px 0;
+            margin: 20px 0;
+        }
+        .highlight-box p {
+            color: var(--text-main);
+            margin: 0;
+            font-weight: 500;
+        }
+        footer {
+            margin-top: 40px;
+            border-top: 1px solid var(--border);
+            padding-top: 20px;
+            text-align: center;
+            font-size: 0.875rem;
+            color: var(--text-muted);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <span class="badge">Official Policy</span>
+        <h1>Privacy Policy &amp; Data Deletion</h1>
+        <p class="updated">Effective Date: September 2026 | WorkNest Co-Working</p>
+
+        <h2>1. Overview</h2>
+        <p>WorkNest Bot provides automated assistance, desk/office bookings, customer service inquiries, and issue resolution for members and visitors of WorkNest Co-Working spaces via WhatsApp.</p>
+
+        <h2>2. Information We Collect</h2>
+        <p>When you interact with our WhatsApp bot, we collect minimal information necessary to deliver our services:</p>
+        <ul>
+            <li><strong>WhatsApp Phone Number:</strong> Used as your unique identifier to manage inquiries and reservations.</li>
+            <li><strong>Profile Display Name:</strong> The name provided by your WhatsApp profile.</li>
+            <li><strong>Message History:</strong> Transcripts of conversations sent to the bot, booking requests, and feedback/complaint reports.</li>
+        </ul>
+
+        <h2>3. How We Use Your Information</h2>
+        <ul>
+            <li>To process and confirm workspace and meeting room reservations.</li>
+            <li>To log, track, and notify you regarding the resolution of workspace maintenance or service tickets.</li>
+            <li>To deliver customer support and operational updates relevant to your membership or booking.</li>
+        </ul>
+
+        <h2>4. Data Sharing &amp; Third Parties</h2>
+        <p>We do not sell, rent, or trade your personal information. Data transmitted through WhatsApp is securely processed using Meta WhatsApp Cloud API and stored in encrypted Supabase database instances. We do not share data with any external advertisers or unverified third parties.</p>
+
+        <div class="highlight-box">
+            <h2>5. User Data Deletion Instructions</h2>
+            <p>You have full control over your personal data. To request the complete deletion of your phone number, profile, and conversation logs from our database:</p>
+            <ul style="margin-top: 10px; margin-bottom: 0;">
+                <li>Send a WhatsApp message saying <strong>"DELETE MY DATA"</strong> or <strong>"REMOVE MY ACCOUNT"</strong> to the WorkNest Bot.</li>
+                <li>Or send an email with your WhatsApp phone number to <strong>support@worknest.offices</strong> requesting account data deletion.</li>
+            </ul>
+            <p style="margin-top: 10px;">All associated records will be permanently purged within 48 hours of verification.</p>
+        </div>
+
+        <h2>6. Contact Us</h2>
+        <p>If you have any questions about this Privacy Policy or our data practices, please reach out to our team at <strong>support@worknest.offices</strong>.</p>
+
+        <footer>
+            &copy; 2026 WorkNest Co-Working. All rights reserved.
+        </footer>
+    </div>
+</body>
+</html>"""
+
+
+
 # ============================================================
 # WhatsApp Webhook Verification
 # ============================================================
