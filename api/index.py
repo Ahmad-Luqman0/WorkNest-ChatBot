@@ -171,8 +171,7 @@ def main_menu():
         "4. Facilities\n"
         "5. Complaints / Support\n"
         "6. Talk to Reception\n"
-        "7. Location & Directions\n"
-        "0. Main Menu\n\n"
+        "7. Location & Directions\n\n"
         "Reply with a number."
     )
 
