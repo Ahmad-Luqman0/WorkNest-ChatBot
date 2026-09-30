@@ -20,12 +20,12 @@ from supabase import Client, create_client
 
 load_dotenv(override=True)
 
-WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
-PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
-VERIFY_TOKEN = os.getenv("VERIFY_TOKEN")
+WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN", "").strip() or None
+PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID", "").strip() or None
+VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "").strip() or None
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip() or None
+SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip() or None
 
 app = FastAPI(title="WorkNest WhatsApp Chatbot")
 
