@@ -1899,8 +1899,10 @@ async def update_booking_status(booking_id: str, request: Request):
     # Send WhatsApp notification to customer if confirmed or cancelled
     if new_status in {"confirmed", "cancelled"}:
         try:
-            phone_number = updated_booking.get("customer_phone")
-            if not phone_number and updated_booking.get("contact_id"):
+            target_phone = None
+
+            # 1. Prefer the verified WhatsApp phone from whatsapp_contacts (always has country code)
+            if updated_booking.get("contact_id"):
                 contact_res = (
                     supabase.table("whatsapp_contacts")
                     .select("phone_number")
@@ -1909,17 +1911,27 @@ async def update_booking_status(booking_id: str, request: Request):
                     .execute()
                 )
                 if contact_res.data:
-                    phone_number = contact_res.data[0].get("phone_number")
+                    target_phone = contact_res.data[0].get("phone_number")
 
-            if phone_number:
-                cust_name = updated_booking.get("customer_name") or "Customer"
+            # 2. Fallback to customer_phone normalized with country code
+            if not target_phone and updated_booking.get("customer_phone"):
+                raw = re.sub(r"[^\d+]", "", updated_booking["customer_phone"])
+                if raw.startswith("+"):
+                    target_phone = raw[1:]
+                elif raw.startswith("0") and len(raw) == 11:
+                    target_phone = "92" + raw[1:]
+                else:
+                    target_phone = raw
+
+            if target_phone:
+                cust_name = updated_booking.get("customer_name") or "Valued Customer"
                 ws = updated_booking.get("workspace_type") or "Workspace"
 
                 if new_status == "confirmed":
                     msg = (
-                        "WorkNest Booking Confirmed!\n\n"
+                        "🎉 WorkNest Booking Confirmed!\n\n"
                         f"Dear {cust_name},\n"
-                        f"Your booking request {booking_id} for {ws} has been confirmed.\n\n"
+                        f"Your booking {booking_id} for {ws} has been confirmed.\n\n"
                         "We look forward to welcoming you at WorkNest!\n"
                         "If you have any questions, feel free to reply to this chat."
                     )
@@ -1927,11 +1939,20 @@ async def update_booking_status(booking_id: str, request: Request):
                     msg = (
                         "WorkNest Booking Update\n\n"
                         f"Dear {cust_name},\n"
-                        f"Your booking request {booking_id} has been cancelled.\n\n"
+                        f"Your booking {booking_id} has been cancelled.\n\n"
                         "If you wish to make a new booking, type 0 to view the main menu."
                     )
 
-                send_whatsapp_message(phone_number, msg)
+                sent = send_whatsapp_message(target_phone, msg)
+
+                # Record outgoing notification in conversation history
+                if sent and updated_booking.get("conversation_id"):
+                    save_message(
+                        conversation_id=updated_booking["conversation_id"],
+                        direction="outgoing",
+                        message_text=msg,
+                        message_type="text",
+                    )
 
         except Exception as e:
             print("Failed to send booking notification via WhatsApp:", e)
