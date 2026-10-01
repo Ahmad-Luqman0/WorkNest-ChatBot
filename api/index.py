@@ -166,12 +166,9 @@ def main_menu():
         "Welcome to WorkNest Co-Working!\n\n"
         "How can we help you today?\n\n"
         "1. Book a Workspace\n"
-        "2. My Booking\n"
-        "3. Pricing & Plans\n"
-        "4. Facilities\n"
-        "5. Complaints / Support\n"
-        "6. Talk to Reception\n"
-        "7. Location & Directions\n\n"
+        "2. Complaints / Support\n"
+        "3. Talk to Reception\n"
+        "4. Location & Directions\n\n"
         "Reply with a number."
     )
 
@@ -386,27 +383,28 @@ def create_booking(
     contact_id=None,
     conversation_id=None,
     status="pending",
+    notes=None,
 ):
     if not supabase:
         return None
 
     try:
+        booking_payload = {
+            "booking_id": booking_id,
+            "contact_id": contact_id,
+            "conversation_id": conversation_id,
+            "workspace_type": workspace_type,
+            "customer_name": customer_name,
+            "customer_phone": customer_phone,
+            "seats": str(seats) if seats else None,
+            "status": status,
+            "notes": notes,
+            "created_at": utc_now(),
+            "updated_at": utc_now(),
+        }
         result = (
             supabase.table("bookings")
-            .insert(
-                {
-                    "booking_id": booking_id,
-                    "contact_id": contact_id,
-                    "conversation_id": conversation_id,
-                    "workspace_type": workspace_type,
-                    "customer_name": customer_name,
-                    "customer_phone": customer_phone,
-                    "seats": str(seats) if seats else None,
-                    "status": status,
-                    "created_at": utc_now(),
-                    "updated_at": utc_now(),
-                }
-            )
+            .insert(booking_payload)
             .execute()
         )
 
@@ -629,17 +627,19 @@ def recover_user_state(conversation_id):
             "has been cancelled",
             "welcome to worknest",
             "thank you for confirming",
+            "our sales team will contact you shortly",
         ]
         if any(cp in last_lower for cp in completion_phrases):
             return state_data
 
-        # 1. Booking Confirmation
+        # 1. Booking Confirmation (legacy / fallback)
         if "please confirm your booking details" in last_lower:
             state_data["state"] = "booking_confirmation"
             ws = re.search(r"Workspace:\s*([^\n]+)", last_prompt)
             nm = re.search(r"Name:\s*([^\n]+)", last_prompt)
             ph = re.search(r"Phone:\s*([^\n]+)", last_prompt)
-            st = re.search(r"Seats / Persons:\s*([^\n]+)", last_prompt)
+            st = re.search(r"Seats(?: / Persons)?:\s*([^\n]+)", last_prompt)
+            br = re.search(r"Branch:\s*([^\n]+)", last_prompt)
             if ws:
                 state_data["booking"]["workspace_type"] = ws.group(1).strip()
             if nm:
@@ -648,61 +648,69 @@ def recover_user_state(conversation_id):
                 state_data["booking"]["phone"] = ph.group(1).strip()
             if st:
                 state_data["booking"]["seats"] = st.group(1).strip()
+            if br:
+                state_data["booking"]["branch"] = br.group(1).strip()
             return state_data
 
-        # 2. Booking Seats
-        if "seats / persons required" in last_lower or "number of seats" in last_lower:
-            state_data["state"] = "booking_seats"
-            for p in valid_outgoing:
-                if "thank you," in p.lower():
-                    nm = re.search(r"Thank you,\s*([^\n!]+)", p)
-                    if nm:
-                        state_data["booking"]["name"] = nm.group(1).strip()
-                if "selected:" in p.lower():
-                    ws = re.search(r"Selected:\s*([^\n]+)", p)
-                    if ws:
-                        state_data["booking"]["workspace_type"] = ws.group(1).strip()
-            for m in messages:
-                if m.get("direction") == "incoming":
-                    cand = re.sub(r"[^\d+]", "", m.get("message_text") or "")
-                    if len(cand) >= 7:
-                        state_data["booking"]["phone"] = m.get("message_text", "").strip()
-                        break
-            return state_data
+        # Helper: Extract booking fields from past outgoing prompts
+        for p in valid_outgoing:
+            if not state_data["booking"].get("branch"):
+                br = re.search(r"Branch:\s*([^\n]+)", p, re.IGNORECASE)
+                if br:
+                    state_data["booking"]["branch"] = br.group(1).strip()
+            if not state_data["booking"].get("workspace_type"):
+                ws = re.search(r"(?:Workspace|Selected Workspace):\s*([^\n]+)", p, re.IGNORECASE)
+                if ws:
+                    state_data["booking"]["workspace_type"] = ws.group(1).strip()
+            if not state_data["booking"].get("seats"):
+                st = re.search(r"Seats(?: / Persons)?:\s*([^\n]+)", p, re.IGNORECASE)
+                if st:
+                    state_data["booking"]["seats"] = st.group(1).strip()
+            if not state_data["booking"].get("name"):
+                nm = re.search(r"Thank you,\s*([^\n!]+)", p, re.IGNORECASE)
+                if nm:
+                    state_data["booking"]["name"] = nm.group(1).strip()
 
-        # 3. Booking Phone
+        # 2. Booking Phone
         if "contact phone number" in last_lower:
             state_data["state"] = "booking_phone"
             nm = re.search(r"Thank you,\s*([^\n!]+)", last_prompt)
             if nm:
                 state_data["booking"]["name"] = nm.group(1).strip()
-            for p in valid_outgoing:
-                if "selected:" in p.lower():
-                    ws = re.search(r"Selected:\s*([^\n]+)", p)
-                    if ws:
-                        state_data["booking"]["workspace_type"] = ws.group(1).strip()
-                        break
             return state_data
 
-        # 4. Booking Name
+        # 3. Booking Name
         if "please enter your full name" in last_lower:
             state_data["state"] = "booking_name"
-            ws = re.search(r"Selected:\s*([^\n]+)", last_prompt)
-            if ws:
-                state_data["booking"]["workspace_type"] = ws.group(1).strip()
+            st = re.search(r"Seats(?: / Persons)?:\s*([^\n]+)", last_prompt)
+            if st:
+                state_data["booking"]["seats"] = st.group(1).strip()
+            return state_data
+
+        # 4. Booking Seats
+        if "seats / persons required" in last_lower or "number of seats" in last_lower:
+            state_data["state"] = "booking_seats"
             return state_data
 
         # 5. Booking Type
         if "please select a workspace type" in last_lower:
             state_data["state"] = "booking_type"
+            br = re.search(r"Branch:\s*([^\n]+)", last_prompt)
+            if br:
+                state_data["booking"]["branch"] = br.group(1).strip()
             return state_data
 
-        # 6. Booking Lookup
-        if "booking id to check your reservation" in last_lower:
+        # 6. Booking Branch
+        if "please select a branch" in last_lower:
+            state_data["state"] = "booking_branch"
+            return state_data
+
+        # 7. Booking Lookup
+        if "booking id to check your reservation" in last_lower or "please enter your booking id" in last_lower:
             state_data["state"] = "booking_lookup"
             return state_data
 
-        # 7. Complaint Details
+        # 8. Complaint Details
         if "describe your complaint" in last_lower:
             state_data["state"] = "complaint_details"
             cat = re.search(r"Selected Category:\s*([^\n]+)", last_prompt)
@@ -710,12 +718,12 @@ def recover_user_state(conversation_id):
                 state_data["complaint"]["category"] = cat.group(1).strip()
             return state_data
 
-        # 8. Complaint Category
+        # 9. Complaint Category
         if "submit a complaint" in last_lower and "select a category" in last_lower:
             state_data["state"] = "complaint_category"
             return state_data
 
-        # 9. Track Complaint
+        # 10. Track Complaint
         if "complaint id you would like to track" in last_lower:
             state_data["state"] = "track_complaint"
             return state_data
@@ -895,79 +903,25 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
         # Book Workspace
         # ----------------------------------------------------
 
-        if message == "1":
+        if message == "1" or lower_message in ["book", "booking", "book a workspace"]:
 
-            state_data["state"] = "booking_type"
+            state_data["state"] = "booking_branch"
+            state_data["booking"] = {}
 
             return (
                 "Book a Workspace\n\n"
-                "Please select a workspace type:\n\n"
-                "1. Shared Seat\n"
-                "2. Private Office\n"
-                "3. Meeting Room\n"
-                "4. Conference Room\n\n"
+                "Please select a branch:\n\n"
+                "1. I-8\n"
+                "2. F-7\n\n"
                 "Type 0 for the main menu.\n\n"
                 "Reply with a number."
             )
 
         # ----------------------------------------------------
-        # My Booking
+        # Complaints / Support
         # ----------------------------------------------------
 
-        if message == "2":
-
-            state_data["state"] = "booking_lookup"
-
-            return (
-                "My Booking\n\n"
-                "Please enter your Booking ID.\n\n"
-                "Example: WN-ABC12345"
-            )
-
-        # ----------------------------------------------------
-        # Pricing
-        # ----------------------------------------------------
-
-        if message == "3":
-
-            state_data["state"] = "pricing"
-
-            return (
-                "Pricing & Plans\n\n"
-                "1. Private Office - Starting from PKR 35,000 per seat\n"
-                "2. Shared Space - Starting from PKR 25,000 per seat\n"
-                "3. Meeting / Conference Room - Starting from PKR 6,000 per hour\n\n"
-                "Type 0 for the main menu.\n\n"
-                "Reply with a number."
-            )
-
-        # ----------------------------------------------------
-        # Facilities
-        # ----------------------------------------------------
-
-        if message == "4":
-
-            state_data["state"] = "facilities"
-
-            return (
-                "WorkNest Facilities\n\n"
-                "1. High-Speed WiFi\n"
-                "2. Power Backup\n"
-                "3. Meeting Rooms\n"
-                "4. Private Offices\n"
-                "5. Dedicated Desks\n"
-                "6. Printing & Scanning\n"
-                "7. Kitchen & Refreshments\n"
-                "8. Parking\n"
-                "9. Reception Support\n\n"
-                "Type 0 to return to the main menu."
-            )
-
-        # ----------------------------------------------------
-        # Complaints
-        # ----------------------------------------------------
-
-        if message == "5":
+        if message == "2" or lower_message in ["complaint", "complaints", "support"]:
 
             state_data["state"] = "complaint_category"
 
@@ -989,7 +943,7 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
         # Reception
         # ----------------------------------------------------
 
-        if message == "6":
+        if message == "3" or lower_message in ["reception", "talk to reception"]:
 
             state_data["state"] = "reception"
 
@@ -1004,7 +958,7 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
         # Location & Directions
         # ----------------------------------------------------
 
-        if message == "7" or lower_message in [
+        if message == "4" or lower_message in [
             "location",
             "directions",
             "address",
@@ -1027,6 +981,49 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
         return "Please select a valid option.\n\n" + main_menu()
 
     # ========================================================
+    # BOOKING BRANCH
+    # ========================================================
+
+    if state == "booking_branch":
+
+        branch_map = {
+            "1": "I-8",
+            "i8": "I-8",
+            "i-8": "I-8",
+            "i 8": "I-8",
+            "i-8 markaz": "I-8",
+            "2": "F-7",
+            "f7": "F-7",
+            "f-7": "F-7",
+            "f 7": "F-7",
+            "f-7 markaz": "F-7",
+        }
+
+        selected_branch = branch_map.get(lower_message)
+
+        if not selected_branch:
+            return (
+                "Please select a valid branch:\n\n"
+                "1. I-8\n"
+                "2. F-7\n\n"
+                "Type 0 for the main menu.\n\n"
+                "Reply with a number."
+            )
+
+        state_data["booking"]["branch"] = selected_branch
+        state_data["state"] = "booking_type"
+
+        return (
+            f"Branch: {selected_branch}\n\n"
+            "Please select a workspace type:\n\n"
+            "1. Shared Seat\n"
+            "2. Private Office\n"
+            "3. Meeting Room\n\n"
+            "Type 0 for the main menu.\n\n"
+            "Reply with a number."
+        )
+
+    # ========================================================
     # BOOKING TYPE
     # ========================================================
 
@@ -1036,26 +1033,51 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
             "1": "Shared Seat",
             "2": "Private Office",
             "3": "Meeting Room",
-            "4": "Conference Room",
         }
 
         if message not in workspace_types:
-
             return (
                 "Please select a valid workspace type:\n\n"
                 "1. Shared Seat\n"
                 "2. Private Office\n"
-                "3. Meeting Room\n"
-                "4. Conference Room\n\n"
+                "3. Meeting Room\n\n"
+                "Type 0 for the main menu.\n\n"
+                "Reply with a number."
+            )
+
+        selected_ws = workspace_types[message]
+        state_data["booking"]["workspace_type"] = selected_ws
+        state_data["state"] = "booking_seats"
+
+        branch = state_data["booking"].get("branch", "I-8")
+
+        return (
+            f"Branch: {branch}\n"
+            f"Workspace: {selected_ws}\n\n"
+            "Please enter the number of seats / persons required.\n\n"
+            "Example: 1 (or 5)\n\n"
+            "Type 0 for the main menu."
+        )
+
+    # ========================================================
+    # BOOKING SEATS
+    # ========================================================
+
+    if state == "booking_seats":
+
+        cleaned_seats = re.sub(r"[^\d]", "", message)
+        if not cleaned_seats or int(cleaned_seats) <= 0:
+            return (
+                "Please enter a valid number of seats / persons required.\n\n"
+                "Example: 1 (or 5)\n\n"
                 "Type 0 for the main menu."
             )
 
-        state_data["booking"]["workspace_type"] = workspace_types[message]
-
+        state_data["booking"]["seats"] = cleaned_seats
         state_data["state"] = "booking_name"
 
         return (
-            f"Selected: {workspace_types[message]}\n\n"
+            f"Seats: {cleaned_seats}\n\n"
             "Please enter your Full Name.\n\n"
             "Example: Luqman Ahmad\n\n"
             "Type 0 for the main menu."
@@ -1067,15 +1089,14 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
 
     if state == "booking_name":
 
-        if len(message) < 2:
-            return "Please enter a valid full name.\n\nExample: Luqman Ahmad\n\nType 0 for the main menu."
+        if len(message.strip()) < 2:
+            return "Please enter a valid full name.\n\nType 0 for the main menu."
 
-        state_data["booking"]["name"] = message
-
+        state_data["booking"]["name"] = message.strip()
         state_data["state"] = "booking_phone"
 
         return (
-            f"Thank you, {message}!\n\n"
+            f"Thank you, {message.strip()}!\n\n"
             "Please enter your Contact Phone Number.\n\n"
             "Example: 03001234567\n\n"
             "Type 0 for the main menu."
@@ -1095,42 +1116,59 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
                 "Type 0 for the main menu."
             )
 
-        state_data["booking"]["phone"] = message
-
-        state_data["state"] = "booking_seats"
-
-        return (
-            "Please enter the number of seats / persons required.\n\n"
-            "Example: 1 (or 5)\n\n"
-            "Type 0 for the main menu."
-        )
-
-    # ========================================================
-    # BOOKING SEATS
-    # ========================================================
-
-    if state == "booking_seats":
-
-        state_data["booking"]["seats"] = message
-
-        state_data["state"] = "booking_confirmation"
-
+        state_data["booking"]["phone"] = message.strip()
         booking = state_data["booking"]
 
+        booking_id = generate_booking_id()
+        booking["booking_id"] = booking_id
+
+        branch = booking.get("branch", "I-8")
+        ws_type = booking.get("workspace_type", "Shared Seat")
+        combined_ws = f"{ws_type} ({branch})" if branch else ws_type
+        notes = f"Branch: {branch}" if branch else ""
+        seats = booking.get("seats", "1")
+        name = booking.get("name", "")
+        phone = booking.get("phone", "")
+
+        state_data["state"] = "main_menu"
+        state_data["booking"] = {}
+
+        create_booking(
+            booking_id=booking_id,
+            workspace_type=combined_ws,
+            customer_name=name,
+            customer_phone=phone,
+            seats=seats,
+            contact_id=contact_id,
+            conversation_id=conversation_id,
+            status="pending",
+            notes=notes,
+        )
+
+        if contact_id and supabase and name:
+            try:
+                supabase.table("whatsapp_contacts").update({
+                    "name": name,
+                    "updated_at": utc_now(),
+                }).eq("id", contact_id).execute()
+            except Exception as e:
+                print("Failed to update contact name from booking:", e)
+
         return (
-            "Please confirm your booking details:\n\n"
-            f"Workspace: {booking.get('workspace_type', '')}\n"
-            f"Name: {booking.get('name', '')}\n"
-            f"Phone: {booking.get('phone', '')}\n"
-            f"Seats / Persons: {booking.get('seats', '')}\n\n"
-            "Reply with:\n"
-            "1. Confirm\n"
-            "2. Cancel\n\n"
-            "Type 0 for the main menu."
+            "Booking request received!\n\n"
+            f"Booking ID: {booking_id}\n\n"
+            f"Branch: {branch}\n"
+            f"Workspace: {ws_type}\n"
+            f"Seats / Persons: {seats}\n"
+            f"Name: {name}\n"
+            f"Phone: {phone}\n\n"
+            "Our sales team will contact you shortly.\n\n"
+            "Thank you for choosing WorkNest!\n\n"
+            "Type 0 to return to the main menu."
         )
 
     # ========================================================
-    # BOOKING CONFIRMATION
+    # BOOKING CONFIRMATION (Legacy Fallback)
     # ========================================================
 
     if state == "booking_confirmation":
@@ -1138,28 +1176,34 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
         if message == "1":
 
             booking_id = generate_booking_id()
-
             state_data["booking"]["booking_id"] = booking_id
-
             booking = state_data["booking"]
-
             state_data["state"] = "main_menu"
+
+            branch = booking.get("branch", "I-8")
+            ws_type = booking.get("workspace_type", "Shared Seat")
+            combined_ws = f"{ws_type} ({branch})" if branch else ws_type
+            notes = f"Branch: {branch}" if branch else ""
+            seats = booking.get("seats", "1")
+            name = booking.get("name", "")
+            phone = booking.get("phone", "")
 
             create_booking(
                 booking_id=booking_id,
-                workspace_type=booking.get("workspace_type", ""),
-                customer_name=booking.get("name", ""),
-                customer_phone=booking.get("phone", ""),
-                seats=booking.get("seats", ""),
+                workspace_type=combined_ws,
+                customer_name=name,
+                customer_phone=phone,
+                seats=seats,
                 contact_id=contact_id,
                 conversation_id=conversation_id,
                 status="pending",
+                notes=notes,
             )
 
-            if contact_id and supabase and booking.get("name"):
+            if contact_id and supabase and name:
                 try:
                     supabase.table("whatsapp_contacts").update({
-                        "name": booking["name"],
+                        "name": name,
                         "updated_at": utc_now(),
                     }).eq("id", contact_id).execute()
                 except Exception as e:
@@ -1168,11 +1212,12 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
             return (
                 "Booking request received!\n\n"
                 f"Booking ID: {booking_id}\n\n"
-                f"Workspace: {booking.get('workspace_type', '')}\n"
-                f"Name: {booking.get('name', '')}\n"
-                f"Phone: {booking.get('phone', '')}\n"
-                f"Seats / Persons: {booking.get('seats', '')}\n\n"
-                "Our reception team will contact you shortly to confirm availability and finalize your booking.\n\n"
+                f"Branch: {branch}\n"
+                f"Workspace: {ws_type}\n"
+                f"Seats / Persons: {seats}\n"
+                f"Name: {name}\n"
+                f"Phone: {phone}\n\n"
+                "Our sales team will contact you shortly.\n\n"
                 "Thank you for choosing WorkNest!\n\n"
                 "Type 0 to return to the main menu."
             )
