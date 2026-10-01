@@ -863,24 +863,45 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
     # Resolved complaint response
     # --------------------------------------------------------
 
-    if state == "main_menu" and message in ["1", "2"] and supabase and contact_id:
+    if state == "main_menu" and message in ["1", "2"] and supabase and contact_id and conversation_id:
 
-        resolved_result = (
-            supabase.table("complaints")
-            .select("*")
-            .eq("contact_id", contact_id)
-            .eq("status", "resolved")
-            .eq("resolved_notification_sent", True)
-            .is_("resolution_response", "null")
-            .order("resolved_notification_sent_at", desc=True)
-            .limit(1)
-            .execute()
-        )
+        # Only intercept 1 or 2 if the immediately preceding outgoing message was the resolution prompt
+        is_answering_resolution = False
+        try:
+            recent_msgs = (
+                supabase.table("whatsapp_messages")
+                .select("direction, message_text")
+                .eq("conversation_id", conversation_id)
+                .order("created_at", desc=True)
+                .limit(5)
+                .execute()
+            )
+            for rm in (recent_msgs.data or []):
+                if rm.get("direction") == "outgoing":
+                    rm_text = (rm.get("message_text") or "").lower()
+                    if "to help us verify this, please let us know whether the issue is still occurring" in rm_text:
+                        is_answering_resolution = True
+                    break
+        except Exception as e:
+            print("Error checking resolution prompt history:", e)
 
-        if resolved_result.data:
+        if is_answering_resolution:
+            resolved_result = (
+                supabase.table("complaints")
+                .select("*")
+                .eq("contact_id", contact_id)
+                .eq("status", "resolved")
+                .eq("resolved_notification_sent", True)
+                .is_("resolution_response", "null")
+                .order("resolved_notification_sent_at", desc=True)
+                .limit(1)
+                .execute()
+            )
 
-            resolved_complaint = resolved_result.data[0]
-            resolved_complaint_id = resolved_complaint["complaint_id"]
+            if resolved_result.data:
+
+                resolved_complaint = resolved_result.data[0]
+                resolved_complaint_id = resolved_complaint["complaint_id"]
 
             if message == "2":
 
