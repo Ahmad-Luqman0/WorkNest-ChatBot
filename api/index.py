@@ -1989,18 +1989,51 @@ async def update_contact_meta(contact_id: int, request: Request):
         if "admin_notes" in body:
             update_data["admin_notes"] = str(body.get("admin_notes") or "").strip()
 
+        # Check if contact_id is actually a conversation_id fallback
+        target_contact_id = contact_id
+        contact_check = (
+            supabase.table("whatsapp_contacts")
+            .select("id")
+            .eq("id", contact_id)
+            .limit(1)
+            .execute()
+        )
+        if not contact_check.data:
+            conv_check = (
+                supabase.table("whatsapp_conversations")
+                .select("contact_id")
+                .eq("id", contact_id)
+                .limit(1)
+                .execute()
+            )
+            if conv_check.data and conv_check.data[0].get("contact_id"):
+                target_contact_id = conv_check.data[0]["contact_id"]
+
         res = (
             supabase.table("whatsapp_contacts")
             .update(update_data)
-            .eq("id", contact_id)
+            .eq("id", target_contact_id)
             .execute()
         )
 
         return {"success": True, "contact": res.data[0] if res.data else {}}
 
     except Exception as e:
-        print("Update contact meta error:", e)
-        return JSONResponse(content={"error": str(e)}, status_code=500)
+        err_str = str(e)
+        print("Update contact meta error:", err_str)
+        if "admin_notes" in err_str or "tags" in err_str or "PGRST204" in err_str:
+            return JSONResponse(
+                content={
+                    "error": (
+                        "Database columns missing. Please execute this in your Supabase SQL Editor:\n\n"
+                        "ALTER TABLE whatsapp_contacts ADD COLUMN IF NOT EXISTS tags TEXT DEFAULT '';\n"
+                        "ALTER TABLE whatsapp_contacts ADD COLUMN IF NOT EXISTS admin_notes TEXT DEFAULT '';\n"
+                        "NOTIFY pgrst, 'reload schema';"
+                    )
+                },
+                status_code=500,
+            )
+        return JSONResponse(content={"error": err_str}, status_code=500)
 
 
 # ============================================================
@@ -5654,8 +5687,9 @@ async function toggleContactTag(conversationId, tag) {
     }
 
     const updatedTags = currentTags.join(", ");
+    const targetId = conv.contact_id || conversationId;
     try {
-        const res = await fetch(`/api/contacts/${conversationId}/meta`, {
+        const res = await fetch(`/api/contacts/${targetId}/meta`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ tags: updatedTags })
@@ -5680,8 +5714,9 @@ async function saveContactNotes(conversationId) {
     if (!input || !conv) return;
 
     const note = input.value.trim();
+    const targetId = conv.contact_id || conversationId;
     try {
-        const res = await fetch(`/api/contacts/${conversationId}/meta`, {
+        const res = await fetch(`/api/contacts/${targetId}/meta`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ admin_notes: note })
