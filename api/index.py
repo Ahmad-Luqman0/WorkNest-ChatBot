@@ -28,11 +28,32 @@ VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "").strip() or None
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip() or None
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip() or None
 
-WORKNEST_LATITUDE = os.getenv("WORKNEST_LATITUDE", "33.6684509").strip()
-WORKNEST_LONGITUDE = os.getenv("WORKNEST_LONGITUDE", "73.0737427").strip()
-WORKNEST_ADDRESS = os.getenv(
-    "WORKNEST_ADDRESS", "3rd Floor, EOBI Mall, I-8 Markaz, Islamabad"
+WORKNEST_I8_LATITUDE = os.getenv("WORKNEST_I8_LATITUDE", "33.6684509").strip()
+WORKNEST_I8_LONGITUDE = os.getenv("WORKNEST_I8_LONGITUDE", "73.0737427").strip()
+WORKNEST_I8_ADDRESS = os.getenv(
+    "WORKNEST_I8_ADDRESS", "3rd Floor, EOBI Mall, I-8 Markaz, Islamabad"
 ).strip()
+WORKNEST_I8_PHONE = os.getenv("WORKNEST_I8_PHONE", "+92 51 8444001").strip()
+WORKNEST_I8_MAPS_URL = os.getenv(
+    "WORKNEST_I8_MAPS_URL",
+    "https://www.google.com/maps/place/WorkNest+Co+Working/data=!4m2!3m1!1s0x0:0xcb86c3882189a887",
+).strip()
+
+WORKNEST_F7_LATITUDE = os.getenv("WORKNEST_F7_LATITUDE", "33.7215").strip()
+WORKNEST_F7_LONGITUDE = os.getenv("WORKNEST_F7_LONGITUDE", "73.0558").strip()
+WORKNEST_F7_ADDRESS = os.getenv(
+    "WORKNEST_F7_ADDRESS", "F-7 Markaz (Jinnah Super), Islamabad"
+).strip()
+WORKNEST_F7_PHONE = os.getenv("WORKNEST_F7_PHONE", "+92 51 8444002").strip()
+WORKNEST_F7_MAPS_URL = os.getenv(
+    "WORKNEST_F7_MAPS_URL",
+    "https://www.google.com/maps/place/WorkNest+Co+Working/data=!4m2!3m1!1s0x0:0xf35c1de8139d7bc5",
+).strip()
+
+# Backwards compatibility aliases
+WORKNEST_LATITUDE = WORKNEST_I8_LATITUDE
+WORKNEST_LONGITUDE = WORKNEST_I8_LONGITUDE
+WORKNEST_ADDRESS = WORKNEST_I8_ADDRESS
 WORKNEST_LOCATION_NAME = os.getenv(
     "WORKNEST_LOCATION_NAME", "WorkNest Co-Working Space"
 ).strip()
@@ -728,6 +749,11 @@ def recover_user_state(conversation_id):
             state_data["state"] = "track_complaint"
             return state_data
 
+        # 11. Location Branch
+        if "select a branch to receive the live interactive map pin" in last_lower or "select a branch for directions" in last_lower:
+            state_data["state"] = "location_branch"
+            return state_data
+
     except Exception as e:
         print("Error recovering user state:", e)
 
@@ -769,6 +795,48 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
 
         return main_menu()
 
+    if any(k in lower_message for k in ["i8 location", "i-8 location", "i8 pin", "i-8 pin"]):
+        state_data["state"] = "main_menu"
+        state_data["booking"] = {}
+        state_data["complaint"] = {}
+        send_whatsapp_location(
+            user_id,
+            latitude=WORKNEST_I8_LATITUDE,
+            longitude=WORKNEST_I8_LONGITUDE,
+            name="WorkNest Co-Working - I-8 Markaz",
+            address=WORKNEST_I8_ADDRESS,
+        )
+        return (
+            "WorkNest I-8 Markaz Branch\n\n"
+            f"Address: {WORKNEST_I8_ADDRESS}\n"
+            f"Google Maps: {WORKNEST_I8_MAPS_URL}\n"
+            f"Phone: {WORKNEST_I8_PHONE}\n"
+            "Hours: Open 24/7 for registered members. Front reception: 9:00 AM - 9:00 PM.\n\n"
+            "An interactive WhatsApp map pin has been sent directly below. Tap the pin or link to navigate.\n\n"
+            "Type 0 to return to the main menu."
+        )
+
+    if any(k in lower_message for k in ["f7 location", "f-7 location", "f7 pin", "f-7 pin"]):
+        state_data["state"] = "main_menu"
+        state_data["booking"] = {}
+        state_data["complaint"] = {}
+        send_whatsapp_location(
+            user_id,
+            latitude=WORKNEST_F7_LATITUDE,
+            longitude=WORKNEST_F7_LONGITUDE,
+            name="WorkNest Co-Working - F-7 Markaz",
+            address=WORKNEST_F7_ADDRESS,
+        )
+        return (
+            "WorkNest F-7 Markaz Branch\n\n"
+            f"Address: {WORKNEST_F7_ADDRESS}\n"
+            f"Google Maps: {WORKNEST_F7_MAPS_URL}\n"
+            f"Phone: {WORKNEST_F7_PHONE}\n"
+            "Hours: Open 24/7 for registered members. Front reception: 9:00 AM - 9:00 PM.\n\n"
+            "An interactive WhatsApp map pin has been sent directly below. Tap the pin or link to navigate.\n\n"
+            "Type 0 to return to the main menu."
+        )
+
     if lower_message in [
         "location",
         "directions",
@@ -778,18 +846,17 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
         "where are you",
     ] or "where is worknest" in lower_message or "how to reach" in lower_message:
 
-        state_data["state"] = "main_menu"
+        state_data["state"] = "location_branch"
         state_data["booking"] = {}
         state_data["complaint"] = {}
 
-        send_whatsapp_location(user_id)
-
         return (
-            "WorkNest Location & Directions\n\n"
-            f"Address: {WORKNEST_ADDRESS}\n"
-            "Hours: Open 24/7 for registered members. Front reception: 9:00 AM - 9:00 PM.\n\n"
-            "An interactive WhatsApp map pin has been sent directly below. Tap the pin to navigate with Google Maps or Apple Maps.\n\n"
-            "Type 0 to return to the main menu."
+            "WorkNest Locations & Directions\n\n"
+            "Please select a branch to receive the live interactive map pin:\n\n"
+            f"1. I-8 Markaz Branch (EOBI Mall)\nAddress: {WORKNEST_I8_ADDRESS}\n\n"
+            f"2. F-7 Markaz Branch (Jinnah Super)\nAddress: {WORKNEST_F7_ADDRESS}\n\n"
+            "Type 0 for the main menu.\n\n"
+            "Reply with 1 or 2."
         )
 
     # --------------------------------------------------------
@@ -897,7 +964,7 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
             "salam",
             "assalamualaikum",
         }:
-            return "Hello!.\n\n" + main_menu()
+            return "Hello!\n\n" + main_menu()
 
         # ----------------------------------------------------
         # Book Workspace
@@ -943,14 +1010,22 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
         # Reception
         # ----------------------------------------------------
 
-        if message == "3" or lower_message in ["reception", "talk to reception"]:
+        if message == "3" or lower_message in ["reception", "talk to reception", "contact", "phone"]:
 
             state_data["state"] = "reception"
 
             return (
-                "Talk to Reception\n\n"
-                "Reception: +92 XXX XXXXXXX\n"
-                "Hours: 9:00 AM - 9:00 PM\n\n"
+                "WorkNest Reception & Support\n\n"
+                "Our front desk teams are available Saturday to Thursday (9:00 AM - 9:00 PM):\n\n"
+                "1. I-8 Markaz Branch (EOBI Mall):\n"
+                f"Address: {WORKNEST_I8_ADDRESS}\n"
+                f"Google Maps: {WORKNEST_I8_MAPS_URL}\n"
+                f"Phone / WhatsApp: {WORKNEST_I8_PHONE}\n\n"
+                "2. F-7 Markaz Branch (Jinnah Super):\n"
+                f"Address: {WORKNEST_F7_ADDRESS}\n"
+                f"Google Maps: {WORKNEST_F7_MAPS_URL}\n"
+                f"Phone / WhatsApp: {WORKNEST_F7_PHONE}\n\n"
+                "Email: info@worknest.pk\n\n"
                 "Type 0 to return to the main menu."
             )
 
@@ -966,16 +1041,15 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
             "pin",
         ]:
 
-            state_data["state"] = "main_menu"
-
-            send_whatsapp_location(user_id)
+            state_data["state"] = "location_branch"
 
             return (
-                "WorkNest Location & Directions\n\n"
-                f"Address: {WORKNEST_ADDRESS}\n"
-                "Hours: Open 24/7 for registered members. Front reception: 9:00 AM - 9:00 PM.\n\n"
-                "An interactive WhatsApp map pin has been sent directly below. Tap the pin to navigate with Google Maps or Apple Maps.\n\n"
-                "Type 0 to return to the main menu."
+                "WorkNest Locations & Directions\n\n"
+                "Please select a branch to receive the live interactive map pin:\n\n"
+                f"1. I-8 Markaz Branch (EOBI Mall)\nAddress: {WORKNEST_I8_ADDRESS}\n\n"
+                f"2. F-7 Markaz Branch (Jinnah Super)\nAddress: {WORKNEST_F7_ADDRESS}\n\n"
+                "Type 0 for the main menu.\n\n"
+                "Reply with 1 or 2."
             )
 
         return "Please select a valid option.\n\n" + main_menu()
@@ -1441,15 +1515,75 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
         return response_text
 
     # ========================================================
+    # LOCATION BRANCH
+    # ========================================================
+
+    if state == "location_branch":
+
+        if message in ["1", "i8", "i-8", "i 8"]:
+            state_data["state"] = "main_menu"
+            send_whatsapp_location(
+                user_id,
+                latitude=WORKNEST_I8_LATITUDE,
+                longitude=WORKNEST_I8_LONGITUDE,
+                name="WorkNest Co-Working - I-8 Markaz",
+                address=WORKNEST_I8_ADDRESS,
+            )
+            return (
+                "WorkNest I-8 Markaz Branch\n\n"
+                f"Address: {WORKNEST_I8_ADDRESS}\n"
+                f"Google Maps: {WORKNEST_I8_MAPS_URL}\n"
+                f"Phone: {WORKNEST_I8_PHONE}\n"
+                "Hours: Open 24/7 for registered members. Front reception: 9:00 AM - 9:00 PM.\n\n"
+                "An interactive WhatsApp map pin has been sent directly below. Tap the pin or link to navigate.\n\n"
+                "Type 0 to return to the main menu."
+            )
+
+        if message in ["2", "f7", "f-7", "f 7"]:
+            state_data["state"] = "main_menu"
+            send_whatsapp_location(
+                user_id,
+                latitude=WORKNEST_F7_LATITUDE,
+                longitude=WORKNEST_F7_LONGITUDE,
+                name="WorkNest Co-Working - F-7 Markaz",
+                address=WORKNEST_F7_ADDRESS,
+            )
+            return (
+                "WorkNest F-7 Markaz Branch\n\n"
+                f"Address: {WORKNEST_F7_ADDRESS}\n"
+                f"Google Maps: {WORKNEST_F7_MAPS_URL}\n"
+                f"Phone: {WORKNEST_F7_PHONE}\n"
+                "Hours: Open 24/7 for registered members. Front reception: 9:00 AM - 9:00 PM.\n\n"
+                "An interactive WhatsApp map pin has been sent directly below. Tap the pin or link to navigate.\n\n"
+                "Type 0 to return to the main menu."
+            )
+
+        return (
+            "Please select a valid branch for directions:\n\n"
+            "1. I-8 Markaz\n"
+            "2. F-7 Markaz\n\n"
+            "Type 0 for the main menu.\n\n"
+            "Reply with 1 or 2."
+        )
+
+    # ========================================================
     # RECEPTION
     # ========================================================
 
     if state == "reception":
 
         return (
-            "Reception\n\n"
-            "Phone: +92 XXX XXXXXXX\n"
-            "Hours: 9:00 AM - 9:00 PM\n\n"
+            "WorkNest Reception & Support\n\n"
+            "Our front desk teams are available Saturday to Thursday (9:00 AM - 9:00 PM):\n\n"
+            "1. I-8 Markaz Branch (EOBI Mall):\n"
+            f"Address: {WORKNEST_I8_ADDRESS}\n"
+            f"Google Maps: {WORKNEST_I8_MAPS_URL}\n"
+            f"Phone / WhatsApp: {WORKNEST_I8_PHONE}\n\n"
+            "2. F-7 Markaz Branch (Jinnah Super):\n"
+            f"Address: {WORKNEST_F7_ADDRESS}\n"
+            f"Google Maps: {WORKNEST_F7_MAPS_URL}\n"
+            f"Phone / WhatsApp: {WORKNEST_F7_PHONE}\n\n"
+            "Email: info@worknest.pk\n\n"
             "Type 0 to return to the main menu."
         )
 
