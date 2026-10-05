@@ -15,6 +15,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from supabase import Client, create_client
 
+try:
+    import pymssql
+except ImportError:
+    pymssql = None
+
 # ============================================================
 # Configuration
 # ============================================================
@@ -27,6 +32,15 @@ VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "").strip() or None
 
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip() or None
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "").strip() or None
+
+# WorkNest SQL Server (website DB) - booking requests go to dbo.WN_BookTour
+DB_HOST = os.getenv("IP", "").strip() or None
+DB_PORT = os.getenv("Port_Number", "").strip() or None
+DB_USER = os.getenv("User_Name", "").strip() or None
+DB_PASSWORD = os.getenv("Password", "").strip() or None
+DB_NAME = os.getenv("DB", "").strip() or None
+
+MSSQL_ENABLED = bool(pymssql) and all([DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME])
 
 WORKNEST_I8_LATITUDE = os.getenv("WORKNEST_I8_LATITUDE", "33.6684509").strip()
 WORKNEST_I8_LONGITUDE = os.getenv("WORKNEST_I8_LONGITUDE", "73.0737427").strip()
@@ -395,6 +409,48 @@ def create_complaint(
 # ============================================================
 
 
+def create_book_tour(name=None, phone=None, message=None, email=None):
+    """Insert a booking request into the WorkNest website table dbo.WN_BookTour.
+
+    Id is an identity column, CreatedOn defaults to GETDATE() and Status to 1.
+    """
+    if not MSSQL_ENABLED:
+        reason = "pymssql not installed" if not pymssql else "DB env vars missing (IP, Port_Number, User_Name, Password, DB)"
+        print(f"[WN_BookTour] skipped insert: {reason}")
+        return None
+
+    print(f"[WN_BookTour] inserting: name={name!r} phone={phone!r} message={message!r}")
+    conn = None
+    try:
+        conn = pymssql.connect(
+            server=DB_HOST,
+            port=int(DB_PORT),
+            user=DB_USER,
+            password=DB_PASSWORD,
+            database=DB_NAME,
+            login_timeout=5,
+            timeout=10,
+        )
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO dbo.WN_BookTour (IdGUID, Name, Email, Message, PhoneNumber) "
+            "OUTPUT INSERTED.Id "
+            "VALUES (%s, %s, %s, %s, %s)",
+            (str(uuid.uuid4()), name, email, message, phone),
+        )
+        row = cursor.fetchone()
+        conn.commit()
+        new_id = row[0] if row else None
+        print(f"[WN_BookTour] inserted Id={new_id}")
+        return new_id
+    except Exception as e:
+        print(f"[WN_BookTour] insert error: {type(e).__name__}: {e}")
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
 def create_booking(
     booking_id,
     workspace_type,
@@ -406,6 +462,24 @@ def create_booking(
     status="pending",
     notes=None,
 ):
+    # Mirror the request into the website's WN_BookTour table; the extra
+    # booking details go into Message since the table has no columns for them.
+    tour_message = " | ".join(
+        part
+        for part in [
+            "WhatsApp Booking",
+            f"Booking ID: {booking_id}",
+            f"Workspace: {workspace_type}" if workspace_type else None,
+            f"Seats / Persons: {seats}" if seats else None,
+        ]
+        if part
+    )
+    create_book_tour(
+        name=customer_name,
+        phone=customer_phone,
+        message=tour_message,
+    )
+
     if not supabase:
         return None
 
