@@ -849,10 +849,6 @@ def chatbot(user_id, message, contact_id=None, conversation_id=None):
             recovered = recover_user_state(conversation_id)
             if recovered and recovered.get("state") != "main_menu":
                 user_states[user_id] = recovered
-    elif user_states[user_id].get("state") == "main_menu" and conversation_id and supabase:
-        recovered = recover_user_state(conversation_id)
-        if recovered and recovered.get("state") != "main_menu":
-            user_states[user_id] = recovered
 
     state_data = user_states[user_id]
     state = state_data["state"]
