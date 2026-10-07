@@ -356,5 +356,24 @@ comment on table bookings is
 'WorkNest workspace bookings submitted through WhatsApp.';
 
 -- ============================================================
+-- 7. CHATBOT STATE (serverless persistence)
+-- ============================================================
+
+create table if not exists chatbot_state (
+    phone_number text primary key,
+
+    state text not null default 'main_menu',
+
+    booking_data jsonb not null default '{}'::jsonb,
+
+    complaint_data jsonb not null default '{}'::jsonb,
+
+    updated_at timestamptz not null default now()
+);
+
+comment on table chatbot_state is
+'Persists in-flight chatbot state across serverless cold starts.';
+
+-- ============================================================
 -- END OF SCHEMA
 -- ============================================================

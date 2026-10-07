@@ -108,10 +108,65 @@ if SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
 
 
 # ============================================================
-# In-memory chatbot state
+# In-memory chatbot state (cache; source of truth is Supabase)
 # ============================================================
 
 user_states = {}
+
+
+def load_user_state(user_id, conversation_id=None):
+    """Load chatbot state from Supabase, falling back to in-memory cache."""
+    # 1. Try in-memory cache first
+    if user_id in user_states:
+        return user_states[user_id]
+
+    # 2. Try Supabase chatbot_state table
+    if supabase:
+        try:
+            res = (
+                supabase.table("chatbot_state")
+                .select("state, booking_data, complaint_data")
+                .eq("phone_number", user_id)
+                .limit(1)
+                .execute()
+            )
+            if res.data:
+                row = res.data[0]
+                state_data = {
+                    "state": row.get("state", "main_menu"),
+                    "booking": row.get("booking_data") or {},
+                    "complaint": row.get("complaint_data") or {},
+                }
+                user_states[user_id] = state_data
+                return state_data
+        except Exception as e:
+            print("load_user_state error:", e)
+
+    # 3. Brand-new user
+    state_data = {"state": "main_menu", "booking": {}, "complaint": {}}
+    user_states[user_id] = state_data
+    return state_data
+
+
+def save_user_state(user_id):
+    """Persist current chatbot state to Supabase."""
+    if not supabase or user_id not in user_states:
+        return
+
+    sd = user_states[user_id]
+    try:
+        supabase.table("chatbot_state").upsert(
+            {
+                "phone_number": user_id,
+                "state": sd.get("state", "main_menu"),
+                "booking_data": sd.get("booking", {}),
+                "complaint_data": sd.get("complaint", {}),
+                "updated_at": utc_now(),
+            },
+            on_conflict="phone_number",
+        ).execute()
+    except Exception as e:
+        print("save_user_state error:", e)
 
 
 # ============================================================
@@ -835,22 +890,22 @@ def recover_user_state(conversation_id):
 
 
 def chatbot(user_id, message, contact_id=None, conversation_id=None):
+    """Wrapper that persists state to Supabase after every call."""
+    result = _chatbot_inner(user_id, message, contact_id, conversation_id)
+    save_user_state(user_id)
+    return result
+
+
+def _chatbot_inner(user_id, message, contact_id=None, conversation_id=None):
 
     message = message.strip()
     lower_message = message.lower()
 
     # --------------------------------------------------------
-    # Initialize user state (with serverless recovery)
+    # Initialize user state (loaded from Supabase)
     # --------------------------------------------------------
 
-    if user_id not in user_states:
-        user_states[user_id] = {"state": "main_menu", "booking": {}, "complaint": {}}
-        if conversation_id and supabase:
-            recovered = recover_user_state(conversation_id)
-            if recovered and recovered.get("state") != "main_menu":
-                user_states[user_id] = recovered
-
-    state_data = user_states[user_id]
+    state_data = load_user_state(user_id, conversation_id)
     state = state_data["state"]
 
     # --------------------------------------------------------
