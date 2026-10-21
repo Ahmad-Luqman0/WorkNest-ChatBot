@@ -42,6 +42,17 @@ DB_NAME = os.getenv("DB", "").strip() or None
 
 MSSQL_ENABLED = bool(pymssql) and all([DB_HOST, DB_PORT, DB_USER, DB_PASSWORD, DB_NAME])
 
+# WorkNest API (WN_APIs): tour inquiries and complaints are sent here, not written to a database directly.
+# WORKNEST_API_URL e.g. https://aeo.eaccounting360.com.pk/WorkNest  (without /api)
+# WORKNEST_API_KEY must equal "Chatbot:ApiKey" in the API's appsettings; the API uses the same key to call
+# /api/notify/complaint-resolved here.
+WORKNEST_API_URL = (os.getenv("WORKNEST_API_URL", "").strip() or "").rstrip("/") or None
+WORKNEST_API_KEY = os.getenv("WORKNEST_API_KEY", "").strip() or None
+
+# Sales contacts shown on the main menu.
+SALES_F7_PHONE = os.getenv("WORKNEST_SALES_F7_PHONE", "03280256000").strip()
+SALES_I8_PHONE = os.getenv("WORKNEST_SALES_I8_PHONE", "03201809696").strip()
+
 WORKNEST_I8_LATITUDE = os.getenv("WORKNEST_I8_LATITUDE", "33.6684509").strip()
 WORKNEST_I8_LONGITUDE = os.getenv("WORKNEST_I8_LONGITUDE", "73.0737427").strip()
 WORKNEST_I8_ADDRESS = os.getenv(
@@ -255,17 +266,32 @@ def main_menu():
     return (
         "Welcome to WorkNest Co-Working!\n\n"
         "How can we help you today?\n\n"
-        "1. Book a Workspace\n"
+        "1. Book a Tour\n"
         "2. Complaints / Support\n"
-        "3. Talk to Reception\n"
-        "4. Location & Directions\n\n"
-        "Reply with a number."
+        "3. Location & Directions\n\n"
+        "Reply with a number.\n\n"
+        "For direct contact to sales\n"
+        f"F-7, Islamabad: {SALES_F7_PHONE}\n"
+        f"I-8, Islamabad: {SALES_I8_PHONE}"
     )
 
 
 # ============================================================
 # Supabase Contact
 # ============================================================
+
+
+def get_contact_display_name(contact_id):
+    """Name saved for a WhatsApp contact (None if unknown)."""
+    if not supabase or not contact_id:
+        return None
+    try:
+        res = supabase.table("whatsapp_contacts").select("name").eq("id", contact_id).limit(1).execute()
+        if res.data:
+            return res.data[0].get("name") or None
+    except Exception as e:
+        print("Contact name lookup failed:", e)
+    return None
 
 
 def get_or_create_contact(phone_number):
@@ -415,47 +441,40 @@ def save_message(
 # ============================================================
 
 
-def create_complaint(
-    complaint_id,
-    complaint,
-    category,
-    contact_id=None,
-    conversation_id=None,
-    is_followup=False,
-    previous_complaint_id=None,
-):
-
-    if not supabase:
-        return None
-
+def worknest_api_post(path, payload):
+    """POST to the WorkNest API with the shared chatbot key. Returns (ok, json_or_none)."""
+    if not WORKNEST_API_URL or not WORKNEST_API_KEY:
+        print(f"[WorkNest API] not configured (WORKNEST_API_URL / WORKNEST_API_KEY); skipped {path}")
+        return False, None
     try:
-
-        result = (
-            supabase.table("complaints")
-            .insert(
-                {
-                    "complaint_id": complaint_id,
-                    "contact_id": contact_id,
-                    "conversation_id": conversation_id,
-                    "complaint": complaint,
-                    "category": category,
-                    "status": "open",
-                    "is_followup": is_followup,
-                    "previous_complaint_id": previous_complaint_id,
-                    "created_at": utc_now(),
-                    "updated_at": utc_now(),
-                }
-            )
-            .execute()
+        res = requests.post(
+            f"{WORKNEST_API_URL}{path}",
+            json=payload,
+            headers={"X-Chatbot-Api-Key": WORKNEST_API_KEY},
+            timeout=15,
         )
-
-        if result.data:
-            return result.data[0]
-
+        body = None
+        try:
+            body = res.json()
+        except ValueError:
+            pass
+        if res.status_code >= 400:
+            print(f"[WorkNest API] {path} failed: {res.status_code} {res.text[:300]}")
+            return False, body
+        return True, body
     except Exception as e:
+        print(f"[WorkNest API] {path} error: {type(e).__name__}: {e}")
+        return False, None
 
-        print("Complaint creation error:", e)
 
+def create_complaint(complaint, category, phone, name=None):
+    """Sends a WhatsApp complaint to the WorkNest API (dbo.WN_Complaints). Returns the complaint number or None."""
+    ok, body = worknest_api_post(
+        "/api/chatbot/complaints",
+        {"phone": phone, "name": name, "category": category, "description": complaint},
+    )
+    if ok and body:
+        return ((body.get("data") or {}).get("complaintNo"))
     return None
 
 
@@ -464,46 +483,26 @@ def create_complaint(
 # ============================================================
 
 
-def create_book_tour(name=None, phone=None, message=None, email=None):
-    """Insert a booking request into the WorkNest website table dbo.WN_BookTour.
-
-    Id is an identity column, CreatedOn defaults to GETDATE() and Status to 1.
-    """
-    if not MSSQL_ENABLED:
-        reason = "pymssql not installed" if not pymssql else "DB env vars missing (IP, Port_Number, User_Name, Password, DB)"
-        print(f"[WN_BookTour] skipped insert: {reason}")
-        return None
-
-    print(f"[WN_BookTour] inserting: name={name!r} phone={phone!r} message={message!r}")
-    conn = None
+def create_book_tour(name=None, phone=None, branch=None, workspace_type=None, seats=None, reference=None):
+    """Book a Tour finished: sent to the WorkNest API, which saves it as a Tour Inquiry (dbo.WN_Contacts)."""
     try:
-        conn = pymssql.connect(
-            server=DB_HOST,
-            port=int(DB_PORT),
-            user=DB_USER,
-            password=DB_PASSWORD,
-            database=DB_NAME,
-            login_timeout=5,
-            timeout=10,
-        )
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO dbo.WN_BookTour (IdGUID, Name, Email, Message, PhoneNumber) "
-            "OUTPUT INSERTED.Id "
-            "VALUES (%s, %s, %s, %s, %s)",
-            (str(uuid.uuid4()), name, email, message, phone),
-        )
-        row = cursor.fetchone()
-        conn.commit()
-        new_id = row[0] if row else None
-        print(f"[WN_BookTour] inserted Id={new_id}")
-        return new_id
-    except Exception as e:
-        print(f"[WN_BookTour] insert error: {type(e).__name__}: {e}")
-        return None
-    finally:
-        if conn:
-            conn.close()
+        seats_int = int(str(seats)) if seats else None
+    except ValueError:
+        seats_int = None
+    ok, body = worknest_api_post(
+        "/api/chatbot/tour-inquiry",
+        {
+            "name": name,
+            "phone": phone,
+            "branch": branch,
+            "workspaceType": workspace_type,
+            "seats": seats_int,
+            "reference": reference,
+        },
+    )
+    if ok:
+        print(f"[Tour inquiry] saved {reference} for {name!r}")
+    return ok
 
 
 def create_booking(
@@ -516,23 +515,17 @@ def create_booking(
     conversation_id=None,
     status="pending",
     notes=None,
+    branch=None,
+    tour_workspace_type=None,
 ):
-    # Mirror the request into the website's WN_BookTour table; the extra
-    # booking details go into Message since the table has no columns for them.
-    tour_message = " | ".join(
-        part
-        for part in [
-            "WhatsApp Booking",
-            f"Booking ID: {booking_id}",
-            f"Workspace: {workspace_type}" if workspace_type else None,
-            f"Seats / Persons: {seats}" if seats else None,
-        ]
-        if part
-    )
+    # The tour request goes to the WorkNest portal (Tour Inquiries) through the WorkNest API.
     create_book_tour(
         name=customer_name,
         phone=customer_phone,
-        message=tour_message,
+        branch=branch,
+        workspace_type=tour_workspace_type or workspace_type,
+        seats=seats,
+        reference=booking_id,
     )
 
     if not supabase:
@@ -721,7 +714,7 @@ def send_whatsapp_location(
         return False
 
 
-def send_resolved_notification(phone_number, complaint_id):
+def send_resolved_notification(phone_number, complaint_id, conversation_id=None):
 
     message = (
         "WorkNest Complaint Update\n\n"
@@ -732,7 +725,14 @@ def send_resolved_notification(phone_number, complaint_id):
         "Please reply with 1 or 2."
     )
 
-    return send_whatsapp_text(phone_number, message)
+    try:
+        sent = bool(send_whatsapp_text(phone_number, message))   # Response is truthy only for a 2xx reply
+    except Exception as e:
+        print("Resolved notification send error:", e)
+        sent = False
+    if sent and conversation_id:
+        save_message(conversation_id, "outgoing", message)
+    return sent
 
 
 # ============================================================
@@ -988,110 +988,31 @@ def _chatbot_inner(user_id, message, contact_id=None, conversation_id=None):
     # Resolved complaint response
     # --------------------------------------------------------
 
-    if state == "main_menu" and message in ["1", "2"] and supabase and contact_id and conversation_id:
+    if state == "main_menu" and message in ["1", "2"]:
 
-        # Only intercept 1 or 2 if the immediately preceding outgoing message was the resolution prompt
-        is_answering_resolution = False
-        try:
-            recent_msgs = (
-                supabase.table("whatsapp_messages")
-                .select("direction, message_text")
-                .eq("conversation_id", conversation_id)
-                .order("created_at", desc=True)
-                .limit(5)
-                .execute()
-            )
-            for rm in (recent_msgs.data or []):
-                if rm.get("direction") == "outgoing":
-                    rm_text = (rm.get("message_text") or "").lower()
-                    if "to help us verify this, please let us know whether the issue is still occurring" in rm_text:
-                        is_answering_resolution = True
-                    break
-        except Exception as e:
-            print("Error checking resolution prompt history:", e)
-
-        if is_answering_resolution:
-            resolved_result = (
-                supabase.table("complaints")
-                .select("*")
-                .eq("contact_id", contact_id)
-                .eq("status", "resolved")
-                .eq("resolved_notification_sent", True)
-                .is_("resolution_response", "null")
-                .order("resolved_notification_sent_at", desc=True)
-                .limit(1)
-                .execute()
-            )
-
-            if resolved_result.data:
-
-                resolved_complaint = resolved_result.data[0]
-                resolved_complaint_id = resolved_complaint["complaint_id"]
-
+        # The WorkNest API knows whether this customer was asked "is your complaint resolved?" and has not
+        # replied yet. If not, 1 / 2 are normal menu choices.
+        ok, body = worknest_api_post(
+            "/api/chatbot/complaints/resolution-reply",
+            {"phone": user_id, "response": "persists" if message == "1" else "resolved"},
+        )
+        data = (body or {}).get("data") or {}
+        if ok and data.get("handled"):
+            user_states[user_id] = {"state": "main_menu", "booking": {}, "complaint": {}}
+            old_id = data.get("complaintNo")
             if message == "2":
-
-                supabase.table("complaints").update(
-                    {
-                        "status": "closed",
-                        "resolution_response": "resolved",
-                        "resolution_response_at": utc_now(),
-                        "auto_close_at": None,
-                        "updated_at": utc_now(),
-                    }
-                ).eq("complaint_id", resolved_complaint_id).execute()
-
-                user_states[user_id] = {
-                    "state": "main_menu",
-                    "booking": {},
-                    "complaint": {},
-                }
-
                 return (
                     "Thank you for confirming.\n\n"
-                    f"Complaint {resolved_complaint_id} has been closed.\n\n"
+                    f"Complaint {old_id} has been closed.\n\n"
                     "If you need anything else, please type 0."
                 )
-
-            followup_complaint_id = generate_complaint_id()
-            followup_complaint = create_complaint(
-                complaint_id=followup_complaint_id,
-                complaint=resolved_complaint.get("complaint", ""),
-                category=resolved_complaint.get("category") or "Other",
-                contact_id=contact_id,
-                conversation_id=conversation_id,
-                is_followup=True,
-                previous_complaint_id=resolved_complaint_id,
-            )
-
-            if not followup_complaint:
-                return (
-                    "We're sorry the issue is still persisting.\n\n"
-                    "We were unable to create a follow-up complaint right "
-                    "now. Please try again."
-                )
-
-            supabase.table("complaints").update(
-                {
-                    "resolution_response": "persists",
-                    "resolution_response_at": utc_now(),
-                    "auto_close_at": None,
-                    "updated_at": utc_now(),
-                }
-            ).eq("complaint_id", resolved_complaint_id).execute()
-
-            user_states[user_id] = {
-                "state": "main_menu",
-                "booking": {},
-                "complaint": {},
-            }
-
+            new_id = data.get("newComplaintNo")
             return (
                 "We're sorry the issue is still persisting.\n\n"
                 "A new complaint has been submitted for further review.\n\n"
-                f"Previous Complaint ID: {resolved_complaint_id}\n"
-                f"New Complaint ID: {followup_complaint_id}\n\n"
-                f"Category: {resolved_complaint.get('category') or 'Other'}\n"
-                "Status: Open\n\n"
+                f"Previous Complaint ID: {old_id}\n"
+                + (f"New Complaint ID: {new_id}\n\n" if new_id else "\n")
+                + "Status: Open\n\n"
                 "Our team will investigate the issue again and contact you "
                 "if further information is required.\n\n"
                 "Type 0 to return to the main menu."
@@ -1116,13 +1037,13 @@ def _chatbot_inner(user_id, message, contact_id=None, conversation_id=None):
         # Book Workspace
         # ----------------------------------------------------
 
-        if message == "1" or lower_message in ["book", "booking", "book a workspace"]:
+        if message == "1" or lower_message in ["book", "booking", "book a tour", "tour", "book a workspace"]:
 
             state_data["state"] = "booking_branch"
             state_data["booking"] = {}
 
             return (
-                "Book a Workspace\n\n"
+                "Book a Tour\n\n"
                 "Please select a branch:\n\n"
                 "1. I-8\n"
                 "2. F-7\n\n"
@@ -1156,7 +1077,7 @@ def _chatbot_inner(user_id, message, contact_id=None, conversation_id=None):
         # Reception
         # ----------------------------------------------------
 
-        if message == "3" or lower_message in ["reception", "talk to reception", "contact", "phone"]:
+        if lower_message in ["reception", "talk to reception", "contact", "phone"]:
 
             state_data["state"] = "reception"
 
@@ -1179,7 +1100,7 @@ def _chatbot_inner(user_id, message, contact_id=None, conversation_id=None):
         # Location & Directions
         # ----------------------------------------------------
 
-        if message == "4" or lower_message in [
+        if message == "3" or lower_message in [
             "location",
             "directions",
             "address",
@@ -1363,6 +1284,8 @@ def _chatbot_inner(user_id, message, contact_id=None, conversation_id=None):
             conversation_id=conversation_id,
             status="pending",
             notes=notes,
+            branch=branch,
+            tour_workspace_type=ws_type,
         )
 
         if contact_id and supabase and name:
@@ -1375,8 +1298,8 @@ def _chatbot_inner(user_id, message, contact_id=None, conversation_id=None):
                 print("Failed to update contact name from booking:", e)
 
         return (
-            "Booking request received!\n\n"
-            f"Booking ID: {booking_id}\n\n"
+            "Tour request received!\n\n"
+            f"Reference: {booking_id}\n\n"
             f"Branch: {branch}\n"
             f"Workspace: {ws_type}\n"
             f"Seats / Persons: {seats}\n"
@@ -1599,24 +1522,20 @@ def _chatbot_inner(user_id, message, contact_id=None, conversation_id=None):
 
     if state == "complaint_description":
 
-        complaint_id = generate_complaint_id()
-
         complaint_text = message
 
         category = state_data["complaint"]["category"]
 
-        # Store complaint in Supabase
-        complaint = create_complaint(
-            complaint_id=complaint_id,
+        # Saved in the WorkNest portal (Complaints page) through the WorkNest API.
+        complaint_id = create_complaint(
             complaint=complaint_text,
             category=category,
-            contact_id=contact_id,
-            conversation_id=conversation_id,
+            phone=user_id,
+            name=get_contact_display_name(contact_id),
         )
 
-        # Do not tell user it was submitted if
-        # database insertion failed.
-        if not complaint:
+        # Do not tell user it was submitted if it was not saved.
+        if not complaint_id:
 
             return (
                 "We were unable to submit your complaint "
@@ -2229,16 +2148,8 @@ async def get_dashboard_stats():
                 conf_res.count if conf_res.count is not None else len(conf_res.data or [])
             )
 
-        # 4. Open Complaints
-        comp_res = (
-            supabase.table("complaints")
-            .select("id", count="exact")
-            .in_("status", ["open", "in_progress"])
-            .execute()
-        )
-        open_comp = (
-            comp_res.count if comp_res.count is not None else len(comp_res.data or [])
-        )
+        # Complaints are managed on the WorkNest portal (Complaints page), not here.
+        open_comp = 0
 
         return {
             "active_conversations": active_conv,
@@ -2789,209 +2700,6 @@ async def send_broadcast(request: Request):
 
 
 # ============================================================
-# Dashboard - Complaints API
-# ============================================================
-
-
-@app.get("/api/complaints")
-async def get_complaints():
-
-    if not supabase:
-
-        return JSONResponse(
-            content={"error": "Supabase is not configured"}, status_code=500
-        )
-
-    try:
-
-        result = (
-            supabase.table("complaints")
-            .select(
-                "id,"
-                "complaint_id,"
-                "complaint,"
-                "category,"
-                "status,"
-                "contact_id,"
-                "conversation_id,"
-                "is_followup,"
-                "previous_complaint_id,"
-                "created_at,"
-                "updated_at,"
-                "whatsapp_contacts("
-                "phone_number,"
-                "name"
-                ")"
-            )
-            .order("created_at", desc=True)
-            .execute()
-        )
-
-        complaints = []
-
-        for complaint in result.data or []:
-
-            contact = complaint.get("whatsapp_contacts") or {}
-
-            complaints.append(
-                {
-                    "id": complaint.get("id"),
-                    "complaint_id": complaint.get("complaint_id"),
-                    "complaint": complaint.get("complaint"),
-                    "category": complaint.get("category"),
-                    "status": complaint.get("status"),
-                    "contact_id": complaint.get("contact_id"),
-                    "conversation_id": complaint.get("conversation_id"),
-                    "is_followup": complaint.get("is_followup", False),
-                    "previous_complaint_id": complaint.get("previous_complaint_id"),
-                    "phone_number": contact.get("phone_number"),
-                    "name": contact.get("name"),
-                    "created_at": complaint.get("created_at"),
-                    "updated_at": complaint.get("updated_at"),
-                }
-            )
-
-        return complaints
-
-    except Exception as e:
-
-        print("Complaints API error:", e)
-
-        return JSONResponse(content={"error": str(e)}, status_code=500)
-
-
-# ============================================================
-# Dashboard - Update Complaint Status
-# ============================================================
-
-
-@app.patch("/api/complaints/{complaint_id}/status")
-async def update_complaint_status(complaint_id: str, request: Request):
-
-    if not supabase:
-
-        return JSONResponse(
-            {"error": "Supabase is not configured"},
-            status_code=500,
-        )
-
-    body = await request.json()
-    new_status = body.get("status")
-
-    allowed_statuses = {
-        "open",
-        "in_progress",
-        "resolved",
-        "closed",
-    }
-
-    if new_status not in allowed_statuses:
-        return JSONResponse(
-            {"error": "Invalid status"},
-            status_code=400,
-        )
-
-    # Get current complaint
-    result = (
-        supabase.table("complaints")
-        .select("*")
-        .eq("complaint_id", complaint_id)
-        .single()
-        .execute()
-    )
-
-    complaint = result.data
-
-    if not complaint:
-        return JSONResponse(
-            {"error": "Complaint not found"},
-            status_code=404,
-        )
-
-    old_status = complaint.get("status")
-
-    # Update complaint status
-    update_data = {
-        "status": new_status,
-        "updated_at": utc_now(),
-    }
-
-    updated = (
-        supabase.table("complaints")
-        .update(update_data)
-        .eq("complaint_id", complaint_id)
-        .execute()
-    )
-
-    updated_complaint = updated.data[0] if updated.data else complaint
-
-    should_send_notification = (
-        new_status == "resolved"
-        and old_status != "resolved"
-        and not complaint.get("resolved_notification_sent", False)
-    )
-
-    notification_sent = False
-    notification_error = None
-
-    if should_send_notification:
-        contact_id = complaint.get("contact_id")
-
-        if contact_id:
-            contact_result = (
-                supabase.table("whatsapp_contacts")
-                .select("phone_number")
-                .eq("id", contact_id)
-                .limit(1)
-                .execute()
-            )
-
-            if contact_result.data:
-                phone_number = contact_result.data[0].get("phone_number")
-
-                if phone_number:
-                    try:
-                        response = send_resolved_notification(
-                            phone_number, complaint_id
-                        )
-
-                        if response and response.ok:
-                            notification_sent = True
-
-                            supabase.table("complaints").update(
-                                {
-                                    "resolved_notification_sent": True,
-                                    "resolved_notification_sent_at": utc_now(),
-                                    "auto_close_at": auto_close_time(),
-                                    "resolution_response": None,
-                                    "resolution_response_at": None,
-                                    "updated_at": utc_now(),
-                                }
-                            ).eq("complaint_id", complaint_id).execute()
-
-                        else:
-                            if response:
-                                notification_error = (
-                                    "WhatsApp API returned "
-                                    f"{response.status_code}: {response.text}"
-                                )
-                            else:
-                                notification_error = "WhatsApp API request failed."
-
-                    except Exception as e:
-                        notification_error = str(e)
-                        print(
-                            "Resolved notification error:",
-                            notification_error,
-                        )
-
-    return {
-        "success": True,
-        "complaint": updated_complaint,
-    }
-
-
-# ============================================================
 # Dashboard - Bookings API
 # ============================================================
 
@@ -3253,9 +2961,10 @@ def dashboard_login_page():
 @app.middleware("http")
 async def dashboard_authentication(request: Request, call_next):
 
-    protected_path = request.url.path == "/dashboard" or request.url.path.startswith(
+    # /api/notify/* is called by the WorkNest API with its own key (checked in the route), not a dashboard login.
+    protected_path = (request.url.path == "/dashboard" or request.url.path.startswith(
         "/api/"
-    )
+    )) and not request.url.path.startswith("/api/notify/")
 
     if protected_path:
         user_name = get_dashboard_session_user_name(
@@ -3272,6 +2981,43 @@ async def dashboard_authentication(request: Request, call_next):
             )
 
     return await call_next(request)
+
+
+@app.post("/api/notify/complaint-resolved")
+async def notify_complaint_resolved(request: Request):
+    """The WorkNest API marked a complaint resolved: ask the customer on WhatsApp whether the issue is fixed.
+
+    Requires the header X-Chatbot-Api-Key = WORKNEST_API_KEY. The customer's 1 / 2 reply is sent back to the
+    WorkNest API by the chatbot (resolution-reply)."""
+    supplied = request.headers.get("X-Chatbot-Api-Key", "")
+    if not WORKNEST_API_KEY or not hmac.compare_digest(supplied, WORKNEST_API_KEY):
+        return JSONResponse({"sent": False, "error": "Invalid API key"}, status_code=401)
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    phone = re.sub(r"\D", "", str(payload.get("phone") or ""))
+    complaint_no = str(payload.get("complaintNo") or "").strip()
+    if phone.startswith("0") and len(phone) == 11:
+        phone = "92" + phone[1:]
+    if not phone or not complaint_no:
+        return JSONResponse({"sent": False, "error": "phone and complaintNo are required"}, status_code=400)
+
+    conversation_id = None
+    try:
+        contact = get_or_create_contact(phone)
+        if contact:
+            conversation = get_or_create_conversation(contact["id"])
+            conversation_id = conversation["id"] if conversation else None
+    except Exception as e:
+        print("notify_complaint_resolved: conversation lookup failed:", e)
+
+    if send_resolved_notification(phone, complaint_no, conversation_id):
+        return JSONResponse({"sent": True})
+    return JSONResponse(
+        {"sent": False, "error": "WhatsApp did not accept the message (the customer may be outside the 24-hour window)."},
+        status_code=502,
+    )
 
 
 @app.get("/dashboard/login", response_class=HTMLResponse)
@@ -4721,7 +4467,8 @@ body {
                 <span class="kpi-label">Confirmed (7d)</span>
                 <span class="kpi-value kpi-success" id="kpiConfirmedWeek">-</span>
             </div>
-            <div class="kpi-card" onclick="showComplaints()" title="Click to view complaints">
+            <!-- Complaints are managed on the WorkNest portal (Complaints page). -->
+            <div class="kpi-card" style="display:none" onclick="showComplaints()" title="Click to view complaints">
                 <span class="kpi-label">Open Complaints</span>
                 <span class="kpi-value kpi-danger" id="kpiOpenComplaints">-</span>
             </div>
@@ -4775,6 +4522,7 @@ body {
                 <button
                     class="tab"
                     id="complaintsTab"
+                    style="display:none"
                     onclick="showComplaints()"
                 >
                     Complaints
@@ -4850,6 +4598,7 @@ body {
                     class="complaint-notification"
                     id="complaintNotification"
                     role="status"
+                    style="display:none"
                 ></div>
 
             </div>
@@ -6371,6 +6120,9 @@ async function chatWithCustomer(phoneNumber, customerName) {
    ========================================================= */
 
 async function loadComplaints() {
+
+    // Complaints moved to the WorkNest portal (Complaints page); nothing to load here.
+    return;
 
     try {
 
